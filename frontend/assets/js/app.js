@@ -49,8 +49,10 @@ let cart = [];
 let buildingsFillLayer = null;
 let buildingsOutlineLayer = null;
 let buildingsAnimation = null;
+let buildingsOutlineAnimation = null;
 let reverseGeocodeTimer = null;
 let lastReverseStamp = 0;
+let reviewReady = false;
 
 function initMap() {
   map = L.map('store-map', { zoomControl: true }).setView([51.505, -0.09], 14);
@@ -73,6 +75,7 @@ function initMap() {
       btn.classList.add('active');
       selectedSize = btn.dataset.size;
       layerGroup.clearLayers();
+      resetReviewState();
       createBBox(map.getCenter(), hIcon);
       document.getElementById('sel-run').disabled = false;
       document.getElementById('sel-run').textContent = 'Continue to review \u2192';
@@ -94,7 +97,7 @@ function initMap() {
   document.getElementById('order-scale').textContent = scaleNames['500'];
   document.getElementById('order-price').textContent = '\u00A389';
   updateLocationDisplay();
-  document.getElementById('order-status-msg').textContent = 'Frame placed! Drag to your chosen location.';
+  document.getElementById('order-status-msg').textContent = 'Frame placed. Drag to adjust, then continue to review.';
 }
 
 function mToLat(m) {
@@ -143,16 +146,22 @@ function drawBBox(icon) {
   const h = [bbox.north, bbox.west];
   if (!handle) {
     handle = L.marker(h, { draggable: true, icon }).addTo(map);
+    handle.on('dragstart', () => {
+      resetReviewState();
+    });
     handle.on('drag', (e) => {
       layerGroup.clearLayers();
-      moveFromHandle(e.target.getLatLng());
+      moveFromHandle(e.target.getLatLng(), false);
+    });
+    handle.on('dragend', (e) => {
+      moveFromHandle(e.target.getLatLng(), true);
     });
   } else {
     handle.setLatLng(h);
   }
 }
 
-function moveFromHandle(ll) {
+function moveFromHandle(ll, updateLocation = true) {
   const w = bbox.east - bbox.west;
   const h = bbox.north - bbox.south;
   bbox = { south: ll.lat - h, north: ll.lat, west: ll.lng, east: ll.lng + w };
@@ -165,12 +174,12 @@ function moveFromHandle(ll) {
     ]);
   }
   if (handle) handle.setLatLng([bbox.north, bbox.west]);
-  updateLocationDisplay();
+  if (updateLocation) updateLocationDisplay();
 }
 
 function clearMap() {
   layerGroup.clearLayers();
-  clearBuildings();
+  resetReviewState();
   if (bboxLayer) {
     map.removeLayer(bboxLayer);
     bboxLayer = null;
@@ -187,7 +196,7 @@ function clearMap() {
   document.getElementById('order-location').textContent = 'Select on map';
   document.getElementById('order-location').classList.add('pending');
   document.getElementById('order-status-msg').textContent =
-    'Choose a scale on the left and drag the frame to your chosen location.';
+    'Choose a scale, place the frame, then continue to review.';
   document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
   document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
   selectedSize = null;
@@ -200,9 +209,7 @@ function updateLocationDisplay() {
     lat: (bbox.south + bbox.north) / 2,
     lng: (bbox.west + bbox.east) / 2,
   };
-  const lat = center.lat.toFixed(5);
-  const lng = center.lng.toFixed(5);
-  const locationText = `Lat ${lat}, Lng ${lng}`;
+  const locationText = 'Locating...';
   selectionMeta = {
     center,
     bbox,
@@ -238,16 +245,20 @@ async function reverseGeocode(center) {
     const res = await fetch(url);
     if (!res.ok) throw new Error('Reverse geocoding failed.');
     const data = await res.json();
-    const label =
-      data?.label ||
-      data?.display_name ||
-      `Lat ${center.lat.toFixed(5)}, Lng ${center.lng.toFixed(5)}`;
+    const label = data?.label || data?.display_name || 'Location unavailable';
     selectionMeta = { ...selectionMeta, locationText: label };
     const locationEl = document.getElementById('order-location');
     locationEl.textContent = label;
     locationEl.classList.remove('pending');
   } catch {
-    // Keep coordinate fallback on any error.
+    if (selectionMeta) {
+      selectionMeta = { ...selectionMeta, locationText: 'Location unavailable' };
+    }
+    const locationEl = document.getElementById('order-location');
+    if (locationEl) {
+      locationEl.textContent = 'Location unavailable';
+      locationEl.classList.remove('pending');
+    }
   }
 }
 
@@ -377,6 +388,14 @@ initCartUI();
 async function reviewSelection() {
   if (!selectedSize || !bbox || !selectionMeta) return;
   const btn = document.getElementById('sel-run');
+  if (reviewReady) {
+    addSelectionToCart();
+    document.getElementById('order-status-msg').textContent = '\u2713 Added to cart.';
+    btn.textContent = '\u2713 Added to cart';
+    openCart();
+    return;
+  }
+
   btn.disabled = true;
   btn.textContent = 'Loading building outlines...';
   document.getElementById('order-status-msg').textContent = 'Zooming to your frame and loading buildings.';
@@ -386,17 +405,19 @@ async function reviewSelection() {
 
   try {
     await loadBuildingsForBBox(bbox);
-    addSelectionToCart();
+    reviewReady = true;
     document.getElementById('order-status-msg').textContent =
-      '\u2713 Buildings outlined. Added to cart.';
-    btn.textContent = '\u2713 Added to cart';
-    openCart();
-  } catch {
-    addSelectionToCart();
+      '\u2713 Buildings outlined. Add to cart when ready.';
+    btn.textContent = 'Add to cart';
+  } catch (err) {
+    const msg = err?.message || '';
+    const hint =
+      msg.includes('Failed to fetch') || msg.includes('Network')
+        ? 'Could not reach the map service. Is the backend running?'
+        : 'Could not load building outlines.';
     document.getElementById('order-status-msg').textContent =
-      'Could not load building outlines. Added to cart anyway.';
-    btn.textContent = '\u2713 Added to cart';
-    openCart();
+      `${hint} Please try again.`;
+    btn.textContent = 'Retry outlines';
   } finally {
     btn.disabled = false;
   }
@@ -415,6 +436,21 @@ function clearBuildings() {
     clearInterval(buildingsAnimation);
     buildingsAnimation = null;
   }
+  if (buildingsOutlineAnimation) {
+    clearInterval(buildingsOutlineAnimation);
+    buildingsOutlineAnimation = null;
+  }
+}
+
+function resetReviewState() {
+  clearBuildings();
+  reviewReady = false;
+  const btn = document.getElementById('sel-run');
+  if (btn) {
+    btn.textContent = 'Continue to review \u2192';
+  }
+  document.getElementById('order-status-msg').textContent =
+    'Frame placed. Drag to adjust, then continue to review.';
 }
 
 async function loadBuildingsForBBox(b) {
@@ -442,6 +478,7 @@ async function loadBuildingsForBBox(b) {
   }).addTo(map);
 
   startBuildingWave();
+  startOutlineShimmer();
 }
 
 function startBuildingWave() {
@@ -458,6 +495,45 @@ function startBuildingWave() {
       layer.setStyle({ color, fillColor: color });
     });
   }, 160);
+}
+
+function startOutlineShimmer() {
+  if (!buildingsOutlineLayer) return;
+  const waveBounds = bbox
+    ? {
+        west: bbox.west,
+        east: bbox.east,
+        south: bbox.south,
+        north: bbox.north,
+      }
+    : buildingsOutlineLayer.getBounds();
+  const minX = waveBounds.getWest ? waveBounds.getWest() : waveBounds.west;
+  const maxX = waveBounds.getEast ? waveBounds.getEast() : waveBounds.east;
+  const minY = waveBounds.getSouth ? waveBounds.getSouth() : waveBounds.south;
+  const maxY = waveBounds.getNorth ? waveBounds.getNorth() : waveBounds.north;
+  const rangeX = Math.max(1e-9, maxX - minX);
+  const rangeY = Math.max(1e-9, maxY - minY);
+
+  const start = Date.now();
+  buildingsOutlineAnimation = setInterval(() => {
+    const t = (Date.now() - start) / 1000;
+    buildingsOutlineLayer.eachLayer((layer) => {
+      if (!layer.getBounds) return;
+      const c = layer.getBounds().getCenter();
+      const nx = (c.lng - minX) / rangeX;
+      const ny = (c.lat - minY) / rangeY;
+      const projection = (nx + ny) / 2;
+      const speed = 0.18;
+      const center = (t * speed) % 1;
+      let dist = Math.abs(projection - center);
+      if (dist > 0.5) dist = 1 - dist;
+      const band = Math.exp(-Math.pow(dist / 0.18, 2));
+      const opacity = 0.35 + band * 0.55;
+      const lightness = 50 + band * 16;
+      const color = `hsl(12, 70%, ${lightness}%)`;
+      layer.setStyle({ color, opacity });
+    });
+  }, 110);
 }
 
 window.showStore = showStore;
