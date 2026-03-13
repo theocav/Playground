@@ -8,9 +8,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
-const SUCCESS_URL = process.env.STRIPE_SUCCESS_URL || `${FRONTEND_URL}/?checkout=success`;
-const CANCEL_URL = process.env.STRIPE_CANCEL_URL || `${FRONTEND_URL}/?checkout=cancel`;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://127.0.0.1:5500,http://localhost:5500';
+const FRONTEND_ORIGINS = FRONTEND_URL.split(',').map((item) => item.trim()).filter(Boolean);
+const PRIMARY_FRONTEND_URL = FRONTEND_ORIGINS[0] || 'http://127.0.0.1:5500';
+const SUCCESS_URL = process.env.STRIPE_SUCCESS_URL || `${PRIMARY_FRONTEND_URL}/?checkout=success`;
+const CANCEL_URL = process.env.STRIPE_CANCEL_URL || `${PRIMARY_FRONTEND_URL}/?checkout=cancel`;
 const USER_AGENT = process.env.USER_AGENT || 'Polyplaces/1.0 (contact@polyplaces.local)';
 const NOMINATIM_URL = process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/reverse';
 const OVERPASS_URL = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
@@ -23,7 +25,7 @@ app.use(
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (!FRONTEND_URL || FRONTEND_URL === '*') return cb(null, true);
-      const allowed = FRONTEND_URL.split(',').map((item) => item.trim()).filter(Boolean);
+      const allowed = FRONTEND_ORIGINS;
       if (allowed.includes(origin)) return cb(null, true);
       return cb(null, false);
     },
