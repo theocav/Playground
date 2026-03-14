@@ -6,13 +6,15 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const PORT = process.env.PORT;
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://127.0.0.1:5500,http://localhost:5500';
 const FRONTEND_ORIGINS = FRONTEND_URL.split(',').map((item) => item.trim()).filter(Boolean);
-const PRIMARY_FRONTEND_URL = FRONTEND_ORIGINS[0] || 'http://127.0.0.1:5500';
-const SUCCESS_URL = process.env.STRIPE_SUCCESS_URL || `${PRIMARY_FRONTEND_URL}/?checkout=success`;
-const CANCEL_URL = process.env.STRIPE_CANCEL_URL || `${PRIMARY_FRONTEND_URL}/?checkout=cancel`;
+const PRIMARY_FRONTEND_URL = 'http://127.0.0.1:5500';
+const BACKEND_URL = process.env.BACKEND_URL || `http://127.0.0.1:${PORT}`;
+const SUCCESS_REDIRECT_URL = process.env.STRIPE_SUCCESS_URL || `${PRIMARY_FRONTEND_URL}/?checkout=success`;
+const FAIL_REDIRECT_URL = process.env.STRIPE_FAIL_URL || `${PRIMARY_FRONTEND_URL}/?checkout=fail`;
+const ABORT_REDIRECT_URL = process.env.STRIPE_ABORT_URL || `${PRIMARY_FRONTEND_URL}/?checkout=abort`;
 const USER_AGENT = process.env.USER_AGENT || 'Polyplaces/1.0 (contact@polyplaces.local)';
 const NOMINATIM_URL = process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/reverse';
 const OVERPASS_URL = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
@@ -37,6 +39,68 @@ const GEO_TTL_MS = 60 * 60 * 1000;
 
 app.get('/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/checkout/return/success', (req, res) => {
+  res.redirect(SUCCESS_REDIRECT_URL);
+});
+
+app.get('/checkout/return/fail', (req, res) => {
+  res.redirect(FAIL_REDIRECT_URL);
+});
+
+app.get('/checkout/return/abort', (req, res) => {
+  res.redirect(ABORT_REDIRECT_URL);
+});
+
+app.get('/api/products', async (req, res) => {
+  if (!stripe) {
+    res.status(501).json({ error: 'Stripe is not configured. Set STRIPE_SECRET_KEY.' });
+    return;
+  }
+
+  try {
+    const response = await stripe.products.list({
+      active: true,
+      limit: 100,
+      expand: ['data.default_price'],
+    });
+
+    const products = response.data
+      .map((product) => {
+        const price = typeof product.default_price === 'object' ? product.default_price : null;
+        if (!price || price.currency !== 'gbp') return null;
+        const sizeCode = product.metadata?.sizeCode || null;
+        const displaySize = product.metadata?.displaySize || null;
+        const aspectRatioRaw = product.metadata?.aspectRatio ?? null;
+        const sortOrderRaw = product.metadata?.sortOrder ?? null;
+        const aspectRatio = Number(aspectRatioRaw);
+        const sortOrder = Number(sortOrderRaw);
+        if (!sizeCode || !displaySize) return null;
+        return {
+          id: product.id,
+          name: product.name,
+          priceId: price.id,
+          unitAmount: price.unit_amount,
+          currency: price.currency,
+          sizeCode,
+          displaySize,
+          aspectRatio: Number.isFinite(aspectRatio) ? aspectRatio : null,
+          sortOrder: Number.isFinite(sortOrder) ? sortOrder : null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => productOrder(a, b));
+
+    if (products.length === 0) {
+      res.json({ products: [], warning: 'No active products found.' });
+      return;
+    }
+
+    res.json({ products });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Unable to load products.' });
+  }
 });
 
 app.get('/api/reverse-geocode', async (req, res) => {
@@ -204,25 +268,39 @@ app.post('/api/checkout', async (req, res) => {
     res.status(400).json({ error: 'Cart is empty.' });
     return;
   }
+  if (items.some((item) => !item?.priceId)) {
+    res.status(400).json({ error: 'Cart items must include priceId.' });
+    return;
+  }
 
   try {
+    const bboxList = items
+      .map((item) => item?.bbox)
+      .filter(Boolean)
+      .map((bbox) => `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`);
+    const metadata = {};
+    if (bboxList.length === 1) metadata.bbox = bboxList[0];
+    if (bboxList.length > 1) metadata.bboxes = bboxList.join('|');
+
+    const productIds = items.map((item) => item?.productId).filter(Boolean);
+    const sizeCodes = items.map((item) => item?.sizeCode).filter(Boolean);
+    if (productIds.length > 0) metadata.productIds = productIds.join('|');
+    if (sizeCodes.length > 0) metadata.sizeCodes = sizeCodes.join('|');
+
     const lineItems = items.map((item) => ({
-      price_data: {
-        currency: 'gbp',
-        product_data: {
-          name: item.name || 'Custom sculpture',
-          description: item.location || 'Custom location',
-        },
-        unit_amount: Math.max(1, Math.round(Number(item.price || 0) * 100)),
-      },
+      price: item.priceId,
       quantity: 1,
     }));
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: lineItems,
-      success_url: SUCCESS_URL,
-      cancel_url: CANCEL_URL,
+      success_url: `${BACKEND_URL}/checkout/return/success`,
+      cancel_url: `${BACKEND_URL}/checkout/return/abort`,
+      metadata,
+      shipping_address_collection: {
+        allowed_countries: ['GB', 'US', 'CA', 'AU', 'NZ', 'IE'],
+      },
     });
 
     res.json({ url: session.url });
@@ -234,6 +312,25 @@ app.post('/api/checkout', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
 });
+
+function sizeOrder(sizeCode) {
+  if (!sizeCode) return Number.POSITIVE_INFINITY;
+  if (String(sizeCode).toLowerCase() === 'a4') return 1000.5;
+  const value = Number(sizeCode);
+  if (Number.isFinite(value)) return value;
+  return Number.POSITIVE_INFINITY;
+}
+
+function productOrder(a, b) {
+  const aSort = Number.isFinite(a.sortOrder) ? a.sortOrder : null;
+  const bSort = Number.isFinite(b.sortOrder) ? b.sortOrder : null;
+  if (aSort !== null || bSort !== null) {
+    if (aSort === null) return 1;
+    if (bSort === null) return -1;
+    if (aSort !== bSort) return aSort - bSort;
+  }
+  return sizeOrder(a.sizeCode) - sizeOrder(b.sizeCode);
+}
 
 function formatLocationLabel(data) {
   if (!data) return null;

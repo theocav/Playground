@@ -4,7 +4,7 @@
   <meta charset="utf-8"/>
   <title>Polyplaces &mdash; Custom 3D Map Sculptures</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <meta name="api-base" content="http://localhost:3001"/>
+  <meta name="api-base" content="http://127.0.0.1:3001"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -22,6 +22,10 @@
     <li><button class="nav-cart" id="cart-toggle">Cart <span id="cart-count">0</span></button></li>
   </ul>
 </nav>
+<div class="checkout-banner" id="checkout-banner" role="status" aria-live="polite" aria-hidden="true">
+  <div class="checkout-banner-text" id="checkout-banner-text"></div>
+  <button class="checkout-banner-close" id="checkout-banner-close" aria-label="Dismiss banner">Dismiss</button>
+</div>
 
 <!-- LANDING -->
 <div id="landing">
@@ -304,12 +308,8 @@
   <div class="configurator">
     <div class="config-left">
       <div class="config-section-title">Scale</div>
-      <div class="size-options">
-        <div class="size-opt active" data-size="500"><div class="size-opt-info"><div class="size-opt-name">Neighbourhood</div><div class="size-opt-sub">500m &times; 500m</div></div><div class="size-opt-price">&pound;89</div></div>
-        <div class="size-opt" data-size="1000"><div class="size-opt-info"><div class="size-opt-name">District</div><div class="size-opt-sub">1km &times; 1km</div></div><div class="size-opt-price">&pound;129</div></div>
-        <div class="size-opt" data-size="2000"><div class="size-opt-info"><div class="size-opt-name">Quarter</div><div class="size-opt-sub">2km &times; 2km</div></div><div class="size-opt-price">&pound;179</div></div>
-        <div class="size-opt" data-size="a4"><div class="size-opt-info"><div class="size-opt-name">Portrait</div><div class="size-opt-sub">1km &times; A4 ratio</div></div><div class="size-opt-price">&pound;129</div></div>
-      </div>
+      <div class="size-options" id="size-options"></div>
+      <div class="size-options-empty" id="size-options-empty">Loading sizes...</div>
       <div class="config-note" style="margin-top:24px">
         <strong>Every sculpture includes:</strong>
         Matte white finish &middot; Numbered edition &middot; Coordinate card &middot; Gift-ready box &middot; One free revision
@@ -318,6 +318,11 @@
 
     <div class="config-map">
       <div id="store-map"></div>
+      <div class="map-search">
+        <input id="map-search-input" type="search" placeholder="Search for a place" autocomplete="off"/>
+        <button id="map-search-btn" type="button">Search</button>
+        <div class="map-search-results" id="map-search-results" aria-live="polite"></div>
+      </div>
       <div class="map-hint" id="map-hint">Select a scale to place your frame</div>
     </div>
 

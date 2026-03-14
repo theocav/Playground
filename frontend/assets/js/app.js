@@ -12,18 +12,227 @@
 
 document.querySelectorAll('.reveal').forEach((el) => obs.observe(el));
 
-const prices = { '500': 89, '1000': 129, '2000': 179, a4: 129 };
-const scaleNames = {
-  '500': 'Neighbourhood \u00B7 500m\u00D7500m',
-  '1000': 'District \u00B7 1km\u00D71km',
-  '2000': 'Quarter \u00B7 2km\u00D72km',
-  a4: 'Portrait \u00B7 1km\u00D7A4',
-};
 const cartStorageKey = 'polyplaces_cart_v1';
 const apiBase =
   document.querySelector('meta[name="api-base"]')?.getAttribute('content')?.replace(/\/$/, '') || '';
+const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
 
 let storeInited = false;
+let products = [];
+let selectedProduct = null;
+let handleIcon = null;
+
+function showCheckoutBanner() {
+  const banner = document.getElementById('checkout-banner');
+  const textEl = document.getElementById('checkout-banner-text');
+  const closeBtn = document.getElementById('checkout-banner-close');
+  if (!banner || !textEl || !closeBtn) return;
+
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('checkout');
+  if (!status) return;
+
+  const messages = {
+    success: 'Payment successful. We have received your order.',
+    fail: 'Payment failed. Please try again or use a different card.',
+    abort: 'Checkout cancelled. You can resume anytime from your cart.',
+  };
+  const message = messages[status] || 'Checkout updated.';
+
+  banner.classList.add('show');
+  banner.classList.add(`is-${status}`);
+  banner.setAttribute('aria-hidden', 'false');
+  textEl.textContent = message;
+
+  closeBtn.onclick = () => {
+    banner.classList.remove('show', 'is-success', 'is-fail', 'is-abort');
+    banner.setAttribute('aria-hidden', 'true');
+  };
+
+  if (window.history && window.history.replaceState) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('checkout');
+    window.history.replaceState({}, '', url);
+  }
+}
+
+function formatPriceFromAmount(amount) {
+  const value = Number(amount) / 100;
+  if (!Number.isFinite(value)) return '\u00A3\u2014';
+  return `\u00A3${value.toFixed(0)}`;
+}
+
+function renderSizeOptions() {
+  const container = document.getElementById('size-options');
+  const empty = document.getElementById('size-options-empty');
+  if (!container || !empty) return;
+  container.innerHTML = '';
+
+  if (products.length === 0) {
+    empty.textContent = 'No sizes available right now.';
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  empty.classList.add('hidden');
+  products.forEach((product) => {
+    const btn = document.createElement('div');
+    btn.className = 'size-opt';
+    btn.dataset.productId = product.id;
+    btn.innerHTML = `
+      <div class="size-opt-info">
+        <div class="size-opt-name">${product.name}</div>
+        <div class="size-opt-sub">${product.displaySize}</div>
+      </div>
+      <div class="size-opt-price">${formatPriceFromAmount(product.unitAmount)}</div>
+    `;
+    btn.onclick = () => selectProduct(product);
+    container.appendChild(btn);
+  });
+}
+
+function selectProduct(product) {
+  if (!product) return;
+  selectedProduct = product;
+  document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
+  const activeBtn = document.querySelector(`.size-opt[data-product-id="${product.id}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  if (layerGroup) layerGroup.clearLayers();
+  resetReviewState();
+
+  document.getElementById('sel-run').disabled = true;
+  document.getElementById('map-hint').textContent = 'Click the map to place your frame';
+
+  document.getElementById('order-scale').textContent = `${product.name} \u00B7 ${product.displaySize}`;
+  document.getElementById('order-price').textContent = formatPriceFromAmount(product.unitAmount);
+  document.getElementById('order-status-msg').textContent =
+    'Click on the map to place your frame, then drag the handle to adjust.';
+  document.getElementById('order-location').textContent = 'Select on map';
+  document.getElementById('order-location').classList.add('pending');
+}
+
+async function loadProducts() {
+  try {
+    const res = await fetch(`${apiBase}/api/products`);
+    const data = await res.json();
+    products = Array.isArray(data.products) ? data.products : [];
+    renderSizeOptions();
+    return products;
+  } catch {
+    products = [];
+    renderSizeOptions();
+    return [];
+  }
+}
+
+async function initStore() {
+  if (storeInited) return;
+  storeInited = true;
+  await loadProducts();
+  initMap();
+  if (products.length > 0) {
+    selectProduct(products[0]);
+  } else {
+    document.getElementById('sel-run').disabled = true;
+    document.getElementById('order-scale').textContent = '\u2014';
+    document.getElementById('order-price').textContent = '\u2014';
+    document.getElementById('order-status-msg').textContent =
+      'No sizes available right now. Please check back soon.';
+    document.getElementById('map-hint').textContent = 'No sizes available';
+  }
+}
+
+function setupMapSearch() {
+  const input = document.getElementById('map-search-input');
+  const button = document.getElementById('map-search-btn');
+  const resultsEl = document.getElementById('map-search-results');
+  if (!input || !button || !resultsEl) return;
+
+  const clearResults = () => {
+    resultsEl.innerHTML = '';
+    resultsEl.classList.remove('show');
+  };
+
+  const applyResult = (item) => {
+    const lat = Number(item?.lat);
+    const lon = Number(item?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    map.setView([lat, lon], Math.max(map.getZoom(), 14), { animate: false });
+    createBBox({ lat, lng: lon }, handleIcon);
+    if (bbox) {
+      document.getElementById('sel-run').disabled = false;
+      document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+      document.getElementById('order-status-msg').textContent = 'Looking good! Adjust the frame then continue.';
+    }
+    clearResults();
+  };
+
+  const renderResults = (items) => {
+    resultsEl.innerHTML = '';
+    if (!items || items.length === 0) {
+      resultsEl.innerHTML = '<div class="map-search-result">No results found.</div>';
+      resultsEl.classList.add('show');
+      return;
+    }
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'map-search-result';
+      row.innerHTML = `<strong>${item.display_name}</strong>`;
+      row.onclick = () => applyResult(item);
+      resultsEl.appendChild(row);
+    });
+    resultsEl.classList.add('show');
+  };
+
+  const runSearch = async (autoSelectTop = false) => {
+    const query = input.value.trim();
+    if (!query) {
+      clearResults();
+      return;
+    }
+    try {
+      const url = new URL(NOMINATIM_SEARCH_URL);
+      url.searchParams.set('format', 'jsonv2');
+      url.searchParams.set('q', query);
+      url.searchParams.set('limit', '6');
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('countrycodes', 'gb');
+      url.searchParams.set('bounded', '1');
+      url.searchParams.set('viewbox', '-8.7,60.9,1.9,49.8');
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      const results = Array.isArray(data) ? data : [];
+      if (autoSelectTop && results.length > 0) {
+        applyResult(results[0]);
+        return;
+      }
+      renderResults(results);
+    } catch {
+      renderResults([]);
+    }
+  };
+
+  button.onclick = () => runSearch(false);
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runSearch(true);
+    }
+    if (e.key === 'Escape') {
+      clearResults();
+    }
+  };
+
+  document.addEventListener('click', (e) => {
+    if (!resultsEl.classList.contains('show')) return;
+    if (e.target === input || resultsEl.contains(e.target) || e.target === button) return;
+    clearResults();
+  });
+}
 
 function showStore() {
   document.getElementById('landing').style.display = 'none';
@@ -31,8 +240,7 @@ function showStore() {
   document.body.classList.add('store-open');
   window.scrollTo(0, 0);
   if (!storeInited) {
-    initMap();
-    storeInited = true;
+    initStore();
   }
 }
 
@@ -43,7 +251,7 @@ function showLanding() {
   window.scrollTo(0, 0);
 }
 
-let map, layerGroup, bbox, bboxLayer, handle, selectedSize;
+let map, layerGroup, bbox, bboxLayer, handle;
 let selectionMeta = null;
 let cart = [];
 let buildingsFillLayer = null;
@@ -55,7 +263,12 @@ let lastReverseStamp = 0;
 let reviewReady = false;
 
 function initMap() {
-  map = L.map('store-map', { zoomControl: true }).setView([51.505, -0.09], 14);
+  const ukBounds = L.latLngBounds([49.8, -8.7], [60.9, 1.9]);
+  map = L.map('store-map', {
+    zoomControl: true,
+    maxBounds: ukBounds,
+    maxBoundsViscosity: 1.0,
+  }).setView([51.505, -0.09], 14);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '\u00A9 OpenStreetMap',
@@ -68,36 +281,26 @@ function initMap() {
     iconSize: [28, 28],
     iconAnchor: [14, 14],
   });
-
-  document.querySelectorAll('.size-opt').forEach((btn) => {
-    btn.onclick = () => {
-      document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      selectedSize = btn.dataset.size;
-      layerGroup.clearLayers();
-      resetReviewState();
-      createBBox(map.getCenter(), hIcon);
-      document.getElementById('sel-run').disabled = false;
-      document.getElementById('sel-run').textContent = 'Continue to review \u2192';
-      document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
-      document.getElementById('order-scale').textContent = scaleNames[selectedSize];
-      document.getElementById('order-price').textContent = `\u00A3${prices[selectedSize]}`;
-      document.getElementById('order-status-msg').textContent = 'Looking good! Adjust the frame then continue.';
-      updateLocationDisplay();
-    };
-  });
+  handleIcon = hIcon;
+  setupMapSearch();
 
   document.getElementById('sel-run').onclick = reviewSelection;
   document.getElementById('sel-clear').onclick = clearMap;
 
-  selectedSize = '500';
-  createBBox(map.getCenter(), hIcon);
-  document.getElementById('sel-run').disabled = false;
-  document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
-  document.getElementById('order-scale').textContent = scaleNames['500'];
-  document.getElementById('order-price').textContent = '\u00A389';
-  updateLocationDisplay();
-  document.getElementById('order-status-msg').textContent = 'Frame placed. Drag to adjust, then continue to review.';
+  map.on('click', (e) => {
+    if (!selectedProduct) return;
+    createBBox(e.latlng, handleIcon);
+    document.getElementById('sel-run').disabled = false;
+    document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+    document.getElementById('order-status-msg').textContent = 'Looking good! Adjust the frame then continue.';
+  });
+
+  map.on('zoomend', () => {
+    if (!bbox) return;
+    if (map.getZoom() < 12) {
+      clearFrame();
+    }
+  });
 }
 
 function mToLat(m) {
@@ -109,13 +312,13 @@ function mToLon(m, lat) {
 }
 
 function computeBBox(c) {
-  let w, h;
-  if (selectedSize === 'a4') {
-    w = 1000;
-    h = 1000 * Math.sqrt(2);
-  } else {
-    w = h = parseFloat(selectedSize);
-  }
+  if (!selectedProduct) return null;
+  const width = Number(selectedProduct.sizeCode);
+  if (!Number.isFinite(width)) return null;
+  const ratio = Number(selectedProduct.aspectRatio);
+  const aspectRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const w = width;
+  const h = width * aspectRatio;
   const dLat = mToLat(h / 2);
   const dLon = mToLon(w / 2, c.lat);
   return { south: c.lat - dLat, north: c.lat + dLat, west: c.lng - dLon, east: c.lng + dLon };
@@ -123,6 +326,7 @@ function computeBBox(c) {
 
 function createBBox(c, icon) {
   bbox = computeBBox(c);
+  if (!bbox) return;
   drawBBox(icon);
   updateLocationDisplay();
 }
@@ -177,8 +381,8 @@ function moveFromHandle(ll, updateLocation = true) {
   if (updateLocation) updateLocationDisplay();
 }
 
-function clearMap() {
-  layerGroup.clearLayers();
+function clearFrame() {
+  if (layerGroup) layerGroup.clearLayers();
   resetReviewState();
   if (bboxLayer) {
     map.removeLayer(bboxLayer);
@@ -189,18 +393,27 @@ function clearMap() {
     handle = null;
   }
   bbox = null;
+  selectionMeta = null;
+  document.getElementById('sel-run').disabled = true;
+  document.getElementById('sel-run').textContent = 'Continue to review \u2192';
+  document.getElementById('order-location').textContent = 'Select on map';
+  document.getElementById('order-location').classList.add('pending');
+  document.getElementById('order-status-msg').textContent =
+    'Click on the map to place your frame, then drag the handle to adjust.';
+  document.getElementById('map-hint').textContent = 'Click the map to place your frame';
+}
+
+function clearMap() {
+  clearFrame();
   document.getElementById('sel-run').disabled = true;
   document.getElementById('sel-run').textContent = 'Continue to review \u2192';
   document.getElementById('order-scale').textContent = '\u2014';
   document.getElementById('order-price').textContent = '\u2014';
-  document.getElementById('order-location').textContent = 'Select on map';
-  document.getElementById('order-location').classList.add('pending');
   document.getElementById('order-status-msg').textContent =
-    'Choose a scale, place the frame, then continue to review.';
+    'Choose a scale, then click the map to place your frame.';
   document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
   document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
-  selectedSize = null;
-  selectionMeta = null;
+  selectedProduct = null;
 }
 
 function updateLocationDisplay() {
@@ -266,6 +479,7 @@ function loadCart() {
   try {
     const stored = JSON.parse(localStorage.getItem(cartStorageKey));
     cart = Array.isArray(stored) ? stored : [];
+    cart = cart.filter((item) => item && item.priceId);
   } catch {
     cart = [];
   }
@@ -324,15 +538,19 @@ function renderCart() {
 }
 
 function addSelectionToCart() {
-  if (!selectedSize || !selectionMeta) return;
+  if (!selectedProduct || !selectionMeta) return;
   const id =
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? crypto.randomUUID()
       : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const item = {
     id,
-    name: scaleNames[selectedSize],
-    price: prices[selectedSize],
+    productId: selectedProduct.id,
+    priceId: selectedProduct.priceId,
+    name: selectedProduct.name,
+    displaySize: selectedProduct.displaySize,
+    sizeCode: selectedProduct.sizeCode,
+    price: Number(selectedProduct.unitAmount || 0) / 100,
     location: selectionMeta.locationText,
     bbox: selectionMeta.bbox,
     center: selectionMeta.center,
@@ -384,9 +602,10 @@ function initCartUI() {
 }
 
 initCartUI();
+showCheckoutBanner();
 
 async function reviewSelection() {
-  if (!selectedSize || !bbox || !selectionMeta) return;
+  if (!selectedProduct || !bbox || !selectionMeta) return;
   const btn = document.getElementById('sel-run');
   if (reviewReady) {
     addSelectionToCart();
