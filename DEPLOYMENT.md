@@ -14,7 +14,9 @@ This repo is set up for two deployments:
 
 ### Notes
 - Links use `/store/` instead of `/store.html` so Hostinger can serve the folder index by default.
-- The frontend expects the API at `https://api.polyplaces.co.uk` via the `meta[name="api-base"]` tag.
+- The frontend can load runtime config from a root `.env` file. Run `npm run serve` to generate `assets/js/env.js` before serving.
+- Set `POLYPLACES_API_BASE_URL` to your backend URL, including your local ngrok URL during development.
+- If `.env` is missing, the frontend falls back to the `meta[name="api-base"]` tag.
 
 ## Backend (Node)
 

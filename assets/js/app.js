@@ -4,6 +4,8 @@ const prefersReducedMotion = window.matchMedia
   ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
   : false;
 
+const runtimeEnv = window.__POLYPLACES_ENV__ || {};
+
 if (prefersReducedMotion) {
   document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in'));
 } else {
@@ -24,8 +26,18 @@ if (prefersReducedMotion) {
 
 const cartStorageKey = 'polyplaces_cart_v1';
 const apiBase =
-  document.querySelector('meta[name="api-base"]')?.getAttribute('content')?.replace(/\/$/, '') || '';
-const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
+  String(
+    runtimeEnv.POLYPLACES_API_BASE_URL ||
+      document.querySelector('meta[name="api-base"]')?.getAttribute('content') ||
+      ''
+  ).replace(/\/$/, '');
+const NOMINATIM_SEARCH_URL =
+  String(runtimeEnv.POLYPLACES_NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search').replace(
+    /\/$/,
+    ''
+  );
+const SEARCH_COUNTRY_CODES = runtimeEnv.POLYPLACES_SEARCH_COUNTRY_CODES || 'gb';
+const SEARCH_VIEWBOX = runtimeEnv.POLYPLACES_SEARCH_VIEWBOX || '-8.7,60.9,1.9,49.8';
 
 let storeInited = false;
 let products = [];
@@ -207,9 +219,9 @@ function setupMapSearch() {
       url.searchParams.set('q', query);
       url.searchParams.set('limit', '6');
       url.searchParams.set('addressdetails', '1');
-      url.searchParams.set('countrycodes', 'gb');
+      url.searchParams.set('countrycodes', SEARCH_COUNTRY_CODES);
       url.searchParams.set('bounded', '1');
-      url.searchParams.set('viewbox', '-8.7,60.9,1.9,49.8');
+      url.searchParams.set('viewbox', SEARCH_VIEWBOX);
       const res = await fetch(url, {
         headers: { Accept: 'application/json' },
       });

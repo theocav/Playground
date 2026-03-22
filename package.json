@@ -2,6 +2,7 @@
   "name": "polyplaces-frontend",
   "private": true,
   "scripts": {
+    "preserve": "node scripts/generate-env.js",
     "serve": "serve -l 3000 ."
   },
   "devDependencies": {
