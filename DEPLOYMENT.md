@@ -30,9 +30,9 @@ Copy `backend/.env.example` into Hostinger’s environment settings and update:
 - `FRONTEND_URL=https://polyplaces.co.uk`
 - `BACKEND_URL=https://api.polyplaces.co.uk`
 - `STRIPE_SECRET_KEY=...`
-- `STRIPE_SUCCESS_URL=https://polyplaces.co.uk/?checkout=success`
-- `STRIPE_FAIL_URL=https://polyplaces.co.uk/?checkout=fail`
-- `STRIPE_ABORT_URL=https://polyplaces.co.uk/?checkout=abort`
+- `STRIPE_SUCCESS_URL=https://polyplaces.co.uk/checkout/success/?session_id={CHECKOUT_SESSION_ID}`
+- `STRIPE_FAIL_URL=https://polyplaces.co.uk/checkout/fail/`
+- `STRIPE_ABORT_URL=https://polyplaces.co.uk/checkout/abort/`
 - `USER_AGENT=Polyplaces/1.0 (contact@polyplaces.co.uk)`
 
 ## DNS / Domains

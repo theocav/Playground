@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Order Confirmed — Polyplaces</title>
+  <meta name="description" content="Payment confirmation for your Polyplaces order."/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="api-base" content="https://api.polyplaces.co.uk"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/assets/css/styles.css"/>
+</head>
+<body data-checkout-result="success">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<nav>
+  <a href="/" class="nav-logo">Polyplaces<sup>&reg;</sup></a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="nav-drawer">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="nav-drawer" id="nav-drawer" aria-hidden="true">
+    <ul class="nav-links" id="nav-links">
+      <li><a href="/#how">How it works</a></li>
+      <li><a href="/#products">Sculptures</a></li>
+      <li><a href="/#reviews">Reviews</a></li>
+      <li><a href="/store/" class="nav-cta btn">Customise yours &rarr;</a></li>
+      <li><button class="nav-cart" id="cart-toggle">Cart <span id="cart-count">0</span></button></li>
+    </ul>
+  </div>
+</nav>
+<div class="nav-overlay" id="nav-overlay" aria-hidden="true"></div>
+<div class="checkout-banner" id="checkout-banner" role="status" aria-live="polite" aria-hidden="true">
+  <div class="checkout-banner-text" id="checkout-banner-text"></div>
+  <button class="checkout-banner-close" id="checkout-banner-close" aria-label="Dismiss banner">Dismiss</button>
+</div>
+
+<main id="main">
+  <div class="checkout-result-wrap">
+    <section class="checkout-result-card reveal" id="checkout-result-root" aria-live="polite">
+      <div class="checkout-result-pill" id="checkout-result-pill">Checkout</div>
+      <h1 class="checkout-result-title" id="checkout-result-title">Confirming your payment…</h1>
+      <p class="checkout-result-body" id="checkout-result-body">This can take a moment. Please keep this tab open.</p>
+      <div class="checkout-result-meta" id="checkout-result-meta" hidden></div>
+      <div class="checkout-result-actions" id="checkout-result-actions">
+        <a class="btn btn-fill" href="/store/">Back to store</a>
+        <a class="btn checkout-btn-ghost" href="/">Home</a>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="cart-overlay" id="cart-overlay"></div>
+<aside class="cart-drawer" id="cart-drawer" aria-hidden="true">
+  <div class="cart-header">
+    <h3>Your cart</h3>
+    <button class="cart-close" id="cart-close" aria-label="Close cart">Close</button>
+  </div>
+  <div class="cart-items" id="cart-items">
+    <div class="cart-empty">Your cart is empty. Add a sculpture to continue.</div>
+  </div>
+  <div class="cart-footer">
+    <div class="cart-total-row"><span class="label">Subtotal</span><span class="value" id="cart-total">&pound;0</span></div>
+    <button class="cart-checkout" id="cart-checkout">Checkout securely with Stripe</button>
+    <div class="cart-note">You will be redirected to Stripe for payment.</div>
+  </div>
+</aside>
+
+<footer class="checkout-footer">
+  <div class="footer-bottom">
+    <span class="footer-copy">&copy; 2025 Polyplaces Ltd. All rights reserved.</span>
+    <span class="footer-copy">Geographic data: OpenStreetMap contributors</span>
+  </div>
+</footer>
+
+<script src="/assets/js/env.js"></script>
+<script src="/assets/js/app.js"></script>
+</body>
+</html>
+
