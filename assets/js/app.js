@@ -419,7 +419,13 @@ function syncCartPreviewMaps() {
   previewEls.forEach((el) => {
     const id = String(el.dataset.itemId || '');
     const item = cart.find((i) => String(i?.id) === id);
-    if (!id || !item?.bbox) return;
+    if (!id) return;
+
+    if (!item?.bbox) {
+      // Older carts (or fallback data) may not include bbox yet; show an explicit placeholder.
+      el.innerHTML = '<div class="cart-item-preview-fallback">Preview unavailable</div>';
+      return;
+    }
 
     const bounds = bboxToBounds(item.bbox);
     if (!bounds) return;
@@ -465,7 +471,22 @@ function syncCartPreviewMaps() {
     cartPreviewMaps.set(id, { map: m, rect });
 
     // If the drawer is animating open, sizes can be wrong at first render.
-    setTimeout(() => m.invalidateSize(false), 80);
+    setTimeout(() => {
+      try {
+        m.invalidateSize(false);
+        m.fitBounds(bounds, { padding: [10, 10], animate: false });
+      } catch {
+        // ignore
+      }
+    }, 80);
+    setTimeout(() => {
+      try {
+        m.invalidateSize(false);
+        m.fitBounds(bounds, { padding: [10, 10], animate: false });
+      } catch {
+        // ignore
+      }
+    }, 360);
   });
 
   for (const [id, entry] of cartPreviewMaps.entries()) {
@@ -817,6 +838,9 @@ function openCart() {
   document.body.classList.add('cart-open');
   document.getElementById('cart-drawer').setAttribute('aria-hidden', 'false');
   syncCartPreviewMaps();
+  // Re-sync after the slide-in transition so Leaflet has the final layout box.
+  setTimeout(syncCartPreviewMaps, 320);
+  setTimeout(syncCartPreviewMaps, 700);
 }
 
 function closeCart() {
