@@ -44,6 +44,46 @@ let products = [];
 let selectedProduct = null;
 let handleIcon = null;
 
+const fallbackProducts = [
+  {
+    id: 'neighbourhood',
+    name: 'Neighbourhood',
+    displaySize: '500m × 500m',
+    sizeCode: 500,
+    aspectRatio: 1,
+    unitAmount: null,
+    // Placeholder. If the backend is down, we still want the UI usable, but Stripe checkout must be disabled.
+    priceId: 'fallback_neighbourhood',
+  },
+  {
+    id: 'district',
+    name: 'District',
+    displaySize: '1km × 1km',
+    sizeCode: 1000,
+    aspectRatio: 1,
+    unitAmount: null,
+    priceId: 'fallback_district',
+  },
+  {
+    id: 'quarter',
+    name: 'Quarter',
+    displaySize: '2km × 2km',
+    sizeCode: 2000,
+    aspectRatio: 1,
+    unitAmount: null,
+    priceId: 'fallback_quarter',
+  },
+  {
+    id: 'frame',
+    name: 'Frame',
+    displaySize: '750m × 1.05km',
+    sizeCode: 750,
+    aspectRatio: 1.4,
+    unitAmount: null,
+    priceId: 'fallback_frame',
+  },
+];
+
 function showCheckoutBanner() {
   const banner = document.getElementById('checkout-banner');
   const textEl = document.getElementById('checkout-banner-text');
@@ -79,6 +119,7 @@ function showCheckoutBanner() {
 }
 
 function formatPriceFromAmount(amount) {
+  if (amount === null || typeof amount === 'undefined') return '\u00A3\u2014';
   const value = Number(amount) / 100;
   if (!Number.isFinite(value)) return '\u00A3\u2014';
   return `\u00A3${value.toFixed(0)}`;
@@ -115,6 +156,10 @@ function renderSizeOptions() {
 
 function selectProduct(product) {
   if (!product) return;
+  const prevBBox = bbox ? { ...bbox } : null;
+  const prevCenter = prevBBox
+    ? { lat: (prevBBox.south + prevBBox.north) / 2, lng: (prevBBox.west + prevBBox.east) / 2 }
+    : null;
   selectedProduct = product;
   document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
   const activeBtn = document.querySelector(`.size-opt[data-product-id="${product.id}"]`);
@@ -124,25 +169,48 @@ function selectProduct(product) {
   resetReviewState();
 
   document.getElementById('sel-run').disabled = true;
-  document.getElementById('map-hint').textContent = 'Click the map to place your frame';
+  document.getElementById('map-hint').textContent = 'Placing your frame…';
 
   document.getElementById('order-scale').textContent = `${product.name} \u00B7 ${product.displaySize}`;
   document.getElementById('order-price').textContent = formatPriceFromAmount(product.unitAmount);
-  document.getElementById('order-status-msg').textContent =
-    'Click on the map to place your frame, then drag the handle to adjust.';
-  document.getElementById('order-location').textContent = 'Select on map';
-  document.getElementById('order-location').classList.add('pending');
+
+  // Place (or morph) the frame immediately at the center of the current viewport.
+  if (map && handleIcon) {
+    const center = prevCenter || map.getCenter();
+    const nextBBox = computeBBoxForProduct(center, product);
+    if (nextBBox) {
+      if (prevBBox && bboxLayer && handle) {
+        animateBBoxTo(nextBBox, 420);
+      } else {
+        createBBox(center, handleIcon);
+      }
+      document.getElementById('sel-run').disabled = false;
+      document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+      document.getElementById('order-status-msg').textContent = 'Adjust the frame, then continue to review.';
+    } else {
+      document.getElementById('order-status-msg').textContent = 'Unable to place the frame for this size.';
+      document.getElementById('map-hint').textContent = 'Select a different size';
+    }
+  } else {
+    document.getElementById('order-status-msg').textContent =
+      'Select a scale, then click the map to place your frame.';
+    document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
+  }
 }
 
 async function loadProducts() {
   try {
     const res = await fetch(`${apiBase}/api/products`);
     const data = await res.json();
-    products = Array.isArray(data.products) ? data.products : [];
+    const list = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : [];
+    products = Array.isArray(list) ? list : [];
+    if (products.length === 0) {
+      products = fallbackProducts.slice();
+    }
     renderSizeOptions();
     return products;
   } catch {
-    products = [];
+    products = fallbackProducts.slice();
     renderSizeOptions();
     return [];
   }
@@ -153,16 +221,12 @@ async function initStore() {
   storeInited = true;
   await loadProducts();
   initMap();
-  if (products.length > 0) {
-    selectProduct(products[0]);
-  } else {
-    document.getElementById('sel-run').disabled = true;
-    document.getElementById('order-scale').textContent = '\u2014';
-    document.getElementById('order-price').textContent = '\u2014';
-    document.getElementById('order-status-msg').textContent =
-      'No sizes available right now. Please check back soon.';
-    document.getElementById('map-hint').textContent = 'No sizes available';
+  if (selectedProduct) {
+    // If the user selected a size before the map finished initializing, re-run selection to auto-place the frame.
+    selectProduct(selectedProduct);
+    return;
   }
+  if (products.length > 0) selectProduct(products[0]);
 }
 
 function setupMapSearch() {
@@ -337,6 +401,75 @@ function computeBBox(c) {
   return { south: c.lat - dLat, north: c.lat + dLat, west: c.lng - dLon, east: c.lng + dLon };
 }
 
+function computeBBoxForProduct(c, product) {
+  if (!product) return null;
+  const width = Number(product.sizeCode);
+  if (!Number.isFinite(width)) return null;
+  const ratio = Number(product.aspectRatio);
+  const aspectRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const w = width;
+  const h = width * aspectRatio;
+  const dLat = mToLat(h / 2);
+  const dLon = mToLon(w / 2, c.lat);
+  return { south: c.lat - dLat, north: c.lat + dLat, west: c.lng - dLon, east: c.lng + dLon };
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function setBBoxLive(next) {
+  bbox = next;
+  if (bboxLayer) {
+    bboxLayer.setLatLngs([
+      [bbox.south, bbox.west],
+      [bbox.south, bbox.east],
+      [bbox.north, bbox.east],
+      [bbox.north, bbox.west],
+    ]);
+  }
+  if (handle) handle.setLatLng([bbox.north, bbox.west]);
+}
+
+let bboxAnim = null;
+function animateBBoxTo(targetBBox, durationMs = 420) {
+  if (!bbox || !targetBBox) return;
+  if (bboxAnim) cancelAnimationFrame(bboxAnim);
+
+  const from = { ...bbox };
+  const start = performance.now();
+
+  if (bboxLayer) bboxLayer.setStyle({ dashArray: '0', fillOpacity: 0.04 });
+
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / durationMs);
+    const e = easeInOutCubic(t);
+    const next = {
+      south: lerp(from.south, targetBBox.south, e),
+      north: lerp(from.north, targetBBox.north, e),
+      west: lerp(from.west, targetBBox.west, e),
+      east: lerp(from.east, targetBBox.east, e),
+    };
+    setBBoxLive(next);
+
+    if (t < 1) {
+      bboxAnim = requestAnimationFrame(step);
+      return;
+    }
+
+    setBBoxLive(targetBBox);
+    if (bboxLayer) bboxLayer.setStyle({ dashArray: '6 4', fillOpacity: 0.05 });
+    updateLocationDisplay();
+    bboxAnim = null;
+  };
+
+  bboxAnim = requestAnimationFrame(step);
+}
+
 function createBBox(c, icon) {
   bbox = computeBBox(c);
   if (!bbox) return;
@@ -503,7 +636,9 @@ function saveCart() {
 }
 
 function formatPrice(value) {
-  return `\u00A3${value.toFixed(0)}`;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '\u00A3\u2014';
+  return `\u00A3${n.toFixed(0)}`;
 }
 
 function renderCart() {
@@ -525,7 +660,8 @@ function renderCart() {
 
   let total = 0;
   cart.forEach((item, idx) => {
-    total += item.price;
+    const p = Number(item.price);
+    if (Number.isFinite(p)) total += p;
     const itemEl = document.createElement('div');
     itemEl.className = 'cart-item';
     itemEl.innerHTML = `
@@ -563,7 +699,7 @@ function addSelectionToCart() {
     name: selectedProduct.name,
     displaySize: selectedProduct.displaySize,
     sizeCode: selectedProduct.sizeCode,
-    price: Number(selectedProduct.unitAmount || 0) / 100,
+    price: Number.isFinite(Number(selectedProduct.unitAmount)) ? Number(selectedProduct.unitAmount) / 100 : NaN,
     location: selectionMeta.locationText,
     bbox: selectionMeta.bbox,
     center: selectionMeta.center,
@@ -585,6 +721,10 @@ function closeCart() {
 
 async function checkoutCart() {
   if (cart.length === 0) return;
+  if (cart.some((i) => String(i?.priceId || '').startsWith('fallback_'))) {
+    alert('Checkout is temporarily unavailable (sizes loaded from fallback config). Please try again shortly.');
+    return;
+  }
   const checkoutBtn = document.getElementById('cart-checkout');
   checkoutBtn.disabled = true;
   checkoutBtn.textContent = 'Redirecting...';
@@ -816,4 +956,3 @@ function startOutlineShimmer() {
 
 window.showStore = showStore;
 window.showLanding = showLanding;
-
