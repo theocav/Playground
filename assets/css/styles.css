@@ -212,9 +212,6 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
 /* STORE PAGE */
 .store-hero{background:var(--white);border-bottom:1px solid var(--border);padding:32px 40px;}
 .store-hero-inner-wrap{max-width:1380px;margin:0 auto;padding:0 40px}
-.store-back{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--mid);text-decoration:none;margin-bottom:20px;transition:color 0.2s;}
-.store-back:hover{color:var(--ink)}
-.store-back svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2}
 .store-hero-inner{display:flex;align-items:flex-start;justify-content:space-between;gap:40px;flex-wrap:wrap}
 .store-title{font-family:var(--serif);font-size:clamp(28px,4vw,44px);font-weight:300;letter-spacing:-0.02em;line-height:1.1}
 .store-title em{font-style:italic;color:var(--mid)}
