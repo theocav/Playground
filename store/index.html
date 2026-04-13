@@ -76,6 +76,23 @@
         <div class="config-section-title">Scale</div>
         <div class="size-options" id="size-options"></div>
         <div class="size-options-empty" id="size-options-empty">Loading sizes...</div>
+
+        <div class="custom-size-panel" id="custom-size-panel" hidden>
+          <div class="custom-size-inputs">
+            <div class="custom-size-field">
+              <label class="custom-size-label" for="custom-width">Width (mm)</label>
+              <input type="number" id="custom-width" class="custom-size-input" min="100" max="330" value="200" step="1" autocomplete="off"/>
+            </div>
+            <div class="custom-size-sep">&times;</div>
+            <div class="custom-size-field">
+              <label class="custom-size-label" for="custom-height">Height (mm)</label>
+              <input type="number" id="custom-height" class="custom-size-input" min="100" max="330" value="200" step="1" autocomplete="off"/>
+            </div>
+          </div>
+          <p class="custom-size-hint">Enter your desired print size. Max 330&times;330mm.</p>
+          <p class="custom-size-surcharge-note" id="custom-size-surcharge-note" hidden>A &pound;5 large-format surcharge applies above 250mm.</p>
+        </div>
+
         <div class="config-note">
           <strong>Every sculpture includes:</strong>
           Matte white finish &middot; Numbered edition &middot; Coordinate card &middot; Gift-ready box &middot; One free revision

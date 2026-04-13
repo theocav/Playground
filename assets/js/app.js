@@ -94,6 +94,15 @@ const productMeta = {
   quarter:       { artSize: '40\u00D740cm', badge: null },
 };
 
+// Custom size configuration. ratePerSqm can be overridden by the API response.
+const CUSTOM_SIZE_MIN_MM = 100;
+const CUSTOM_SIZE_MAX_MM = 330;
+const CUSTOM_SIZE_LARGE_THRESHOLD_MM = 250;
+const CUSTOM_SIZE_LARGE_SURCHARGE_GBP = 5;
+const CUSTOM_SIZE_DEFAULT_RATE_PER_SQM = 1500; // £ per m²
+const CUSTOM_MAP_SCALE = 3; // 1 mm of print = 3 m of map coverage
+let customSizeRatePerSqm = CUSTOM_SIZE_DEFAULT_RATE_PER_SQM;
+
 function getFocusableElements(container) {
   if (!container) return [];
   return Array.from(
@@ -231,6 +240,20 @@ function renderSizeOptions() {
     btn.onclick = () => selectProduct(product);
     container.appendChild(btn);
   });
+
+  // Custom size option — always appended last.
+  const customBtn = document.createElement('div');
+  customBtn.className = 'size-opt size-opt-custom';
+  customBtn.dataset.productId = 'custom';
+  customBtn.innerHTML = `
+    <div class="size-opt-info">
+      <div class="size-opt-name-row"><div class="size-opt-name">Custom</div></div>
+      <div class="size-opt-sub">Up to ${CUSTOM_SIZE_MAX_MM}\u00D7${CUSTOM_SIZE_MAX_MM}mm</div>
+    </div>
+    <div class="size-opt-price size-opt-price-custom">&darr; Set size</div>
+  `;
+  customBtn.onclick = () => activateCustomSize();
+  container.appendChild(customBtn);
 }
 
 function selectProduct(product) {
@@ -243,6 +266,10 @@ function selectProduct(product) {
   document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
   const activeBtn = document.querySelector(`.size-opt[data-product-id="${product.id}"]`);
   if (activeBtn) activeBtn.classList.add('active');
+
+  // Show or hide the custom size inputs panel.
+  const customPanel = document.getElementById('custom-size-panel');
+  if (customPanel) customPanel.hidden = product.id !== 'custom';
 
   if (layerGroup) layerGroup.clearLayers();
   resetReviewState();
@@ -286,6 +313,9 @@ async function loadProducts() {
     if (products.length === 0) {
       products = fallbackProducts.slice();
     }
+    if (Number.isFinite(Number(data?.customSizePricePerSqm)) && Number(data.customSizePricePerSqm) > 0) {
+      customSizeRatePerSqm = Number(data.customSizePricePerSqm);
+    }
     renderSizeOptions();
     return products;
   } catch {
@@ -300,6 +330,7 @@ async function initStore() {
   storeInited = true;
   await loadProducts();
   initMap();
+  initCustomSizePanel();
   if (selectedProduct) {
     // If the user selected a size before the map finished initializing, re-run selection to auto-place the frame.
     selectProduct(selectedProduct);
@@ -872,6 +903,8 @@ function clearMap() {
   document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
   document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
   selectedProduct = null;
+  const customPanel = document.getElementById('custom-size-panel');
+  if (customPanel) customPanel.hidden = true;
 }
 
 function updateLocationDisplay() {
@@ -1030,6 +1063,10 @@ function addSelectionToCart() {
     customLabel: (document.getElementById('custom-location-label')?.value || '').trim(),
     bbox: selectionMeta.bbox,
     center: selectionMeta.center,
+    ...(selectedProduct.id === 'custom' && {
+      customWidthMm: selectedProduct.customWidthMm,
+      customHeightMm: selectedProduct.customHeightMm,
+    }),
   };
   cart.push(item);
   saveCart();
@@ -1155,6 +1192,87 @@ function initNavUI() {
     if (e.target.closest('a,button')) closeNav();
   });
 }
+
+// ── Custom size ────────────────────────────────────────────────────────────────
+
+function calculateCustomPrice(widthMm, heightMm) {
+  const areaSqm = (widthMm / 1000) * (heightMm / 1000);
+  let price = Math.round(areaSqm * customSizeRatePerSqm);
+  if (widthMm > CUSTOM_SIZE_LARGE_THRESHOLD_MM || heightMm > CUSTOM_SIZE_LARGE_THRESHOLD_MM) {
+    price += CUSTOM_SIZE_LARGE_SURCHARGE_GBP;
+  }
+  return price; // whole pounds
+}
+
+function buildCustomProduct(widthMm, heightMm) {
+  const w = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, widthMm)));
+  const h = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, heightMm)));
+  const pricePounds = calculateCustomPrice(w, h);
+  return {
+    id: 'custom',
+    name: 'Custom',
+    displaySize: `${w}\u00D7${h}mm`,
+    sizeCode: w * CUSTOM_MAP_SCALE,
+    aspectRatio: h / w,
+    unitAmount: pricePounds * 100,
+    priceId: 'custom',
+    customWidthMm: w,
+    customHeightMm: h,
+  };
+}
+
+function activateCustomSize() {
+  const panel = document.getElementById('custom-size-panel');
+  if (panel) panel.hidden = false;
+  document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
+  const customBtn = document.querySelector('.size-opt[data-product-id="custom"]');
+  if (customBtn) customBtn.classList.add('active');
+  updateCustomSizeSelection();
+}
+
+function updateCustomSizeSelection() {
+  const wInput = document.getElementById('custom-width');
+  const hInput = document.getElementById('custom-height');
+  if (!wInput || !hInput) return;
+
+  const rawW = Number(wInput.value);
+  const rawH = Number(hInput.value);
+  if (!Number.isFinite(rawW) || rawW <= 0 || !Number.isFinite(rawH) || rawH <= 0) return;
+
+  const w = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, rawW)));
+  const h = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, rawH)));
+
+  const product = buildCustomProduct(w, h);
+
+  // Keep the custom button price label in sync.
+  const priceLabelEl = document.querySelector('.size-opt[data-product-id="custom"] .size-opt-price');
+  if (priceLabelEl) priceLabelEl.textContent = formatPrice(product.unitAmount / 100);
+
+  // Show surcharge note if applicable.
+  const surchargeEl = document.getElementById('custom-size-surcharge-note');
+  if (surchargeEl) {
+    const hasLarge = w > CUSTOM_SIZE_LARGE_THRESHOLD_MM || h > CUSTOM_SIZE_LARGE_THRESHOLD_MM;
+    surchargeEl.hidden = !hasLarge;
+  }
+
+  selectProduct(product);
+}
+
+function initCustomSizePanel() {
+  const wInput = document.getElementById('custom-width');
+  const hInput = document.getElementById('custom-height');
+  if (!wInput || !hInput) return;
+  const onChange = () => {
+    if (selectedProduct?.id !== 'custom') return;
+    updateCustomSizeSelection();
+  };
+  wInput.addEventListener('input', onChange);
+  hInput.addEventListener('input', onChange);
+  wInput.addEventListener('change', onChange);
+  hInput.addEventListener('change', onChange);
+}
+
+// ── End custom size ────────────────────────────────────────────────────────────
 
 initCartUI();
 initNavUI();

@@ -327,6 +327,19 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
 .size-opt-name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .size-opt-badge{font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:var(--accent);background:var(--accent-bg);border:1px solid rgba(201,79,44,0.2);padding:2px 6px;border-radius:2px;white-space:nowrap;line-height:1.5}
 .size-opt-art{color:var(--light)}
+.size-opt-price-custom{font-size:13px;color:var(--mid);font-family:var(--sans)}
+
+/* custom size panel */
+.custom-size-panel{margin-top:12px;padding:14px;background:var(--bg);border:1.5px solid var(--accent);border-radius:2px}
+.custom-size-inputs{display:flex;align-items:flex-end;gap:8px}
+.custom-size-field{display:flex;flex-direction:column;gap:4px;flex:1}
+.custom-size-label{font-size:11px;font-weight:500;color:var(--mid);letter-spacing:0.04em;text-transform:uppercase}
+.custom-size-input{width:100%;padding:8px 10px;border:1.5px solid var(--border);background:var(--white);font-size:14px;font-family:var(--sans);color:var(--ink);border-radius:2px;appearance:textfield;-moz-appearance:textfield}
+.custom-size-input::-webkit-inner-spin-button,.custom-size-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.custom-size-input:focus{outline:none;border-color:var(--accent)}
+.custom-size-sep{font-size:16px;color:var(--mid);padding-bottom:8px;flex-shrink:0}
+.custom-size-hint{font-size:11px;color:var(--mid);margin:8px 0 0;line-height:1.5}
+.custom-size-surcharge-note{font-size:11px;color:var(--accent);margin:6px 0 0;line-height:1.5;font-weight:500}
 
 /* custom location label */
 .order-label-wrap{align-items:center}
