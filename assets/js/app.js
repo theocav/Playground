@@ -47,10 +47,27 @@ let cartFocusCleanup = null;
 let navFocusCleanup = null;
 let lastCartFocus = null;
 
+const PRODUCT_NAME_OVERRIDES = {
+  neighbourhood: 'Small',
+  quarter: 'Large',
+  portrait: 'A4',
+};
+const PRODUCT_ID_BLACKLIST = new Set(['district']);
+
+function sanitizeProductList(list) {
+  const input = Array.isArray(list) ? list : [];
+  return input
+    .filter((product) => product && !PRODUCT_ID_BLACKLIST.has(String(product.id)))
+    .map((product) => {
+      const overrideName = PRODUCT_NAME_OVERRIDES[String(product.id)];
+      return overrideName ? { ...product, name: overrideName } : product;
+    });
+}
+
 const fallbackProducts = [
   {
     id: 'neighbourhood',
-    name: 'Neighbourhood',
+    name: 'Small',
     displaySize: '500m × 500m',
     sizeCode: 500,
     aspectRatio: 1,
@@ -59,17 +76,8 @@ const fallbackProducts = [
     priceId: 'fallback_neighbourhood',
   },
   {
-    id: 'district',
-    name: 'District',
-    displaySize: '1km × 1km',
-    sizeCode: 1000,
-    aspectRatio: 1,
-    unitAmount: null,
-    priceId: 'fallback_district',
-  },
-  {
     id: 'quarter',
-    name: 'Quarter',
+    name: 'Large',
     displaySize: '2km × 2km',
     sizeCode: 2000,
     aspectRatio: 1,
@@ -78,7 +86,7 @@ const fallbackProducts = [
   },
   {
     id: 'portrait',
-    name: 'Frame',
+    name: 'A4',
     displaySize: '750m × 1.05km',
     sizeCode: 750,
     aspectRatio: 1.4,
@@ -89,7 +97,6 @@ const fallbackProducts = [
 
 const productMeta = {
   neighbourhood: { artSize: '20\u00D720cm', badge: 'Most popular' },
-  district:      { artSize: '30\u00D730cm', badge: null },
   portrait:      { artSize: '20\u00D728cm', badge: 'Best for gifting' },
   quarter:       { artSize: '40\u00D740cm', badge: null },
 };
@@ -309,17 +316,15 @@ async function loadProducts() {
     const res = await fetch(`${apiBase}/api/products`);
     const data = await res.json();
     const list = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : [];
-    products = Array.isArray(list) ? list : [];
-    if (products.length === 0) {
-      products = fallbackProducts.slice();
-    }
+    products = sanitizeProductList(list);
+    if (products.length === 0) products = sanitizeProductList(fallbackProducts.slice());
     if (Number.isFinite(Number(data?.customSizePricePerSqm)) && Number(data.customSizePricePerSqm) > 0) {
       customSizeRatePerSqm = Number(data.customSizePricePerSqm);
     }
     renderSizeOptions();
     return products;
   } catch {
-    products = fallbackProducts.slice();
+    products = sanitizeProductList(fallbackProducts.slice());
     renderSizeOptions();
     return [];
   }
