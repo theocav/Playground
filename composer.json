@@ -2,13 +2,11 @@
   "scripts": {
     "post-install-cmd": [
       "@php -r \"echo 'Deploy time : ' . date('Y-m-d H:i:s T') . PHP_EOL;\"",
-      "git log -1 --format='Last commit : %ci  (%cr)  —  %s' 2>/dev/null || echo 'Last commit : unavailable'",
-      "@php deploy/bust-cache.php"
+      "git log -1 --format='Last commit : %ci  (%cr)  —  %s' 2>/dev/null || echo 'Last commit : unavailable'"
     ],
     "post-update-cmd": [
       "@php -r \"echo 'Deploy time : ' . date('Y-m-d H:i:s T') . PHP_EOL;\"",
-      "git log -1 --format='Last commit : %ci  (%cr)  —  %s' 2>/dev/null || echo 'Last commit : unavailable'",
-      "@php deploy/bust-cache.php"
+      "git log -1 --format='Last commit : %ci  (%cr)  —  %s' 2>/dev/null || echo 'Last commit : unavailable'"
     ]
   }
 }
