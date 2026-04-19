@@ -24,6 +24,17 @@ if (prefersReducedMotion) {
   document.querySelectorAll('.reveal').forEach((el) => obs.observe(el));
 }
 
+const _hintSentinel = document.getElementById('map-hint-sentinel');
+const _mapHint = document.getElementById('map-hint');
+if (_hintSentinel && _mapHint) {
+  new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => _mapHint.classList.toggle('is-docked', e.isIntersecting));
+    },
+    { threshold: 0 }
+  ).observe(_hintSentinel);
+}
+
 const cartStorageKey = 'polyplaces_cart_v1';
 const apiBase =
   String(
