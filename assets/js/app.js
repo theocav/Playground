@@ -51,6 +51,7 @@ const SEARCH_COUNTRY_CODES = runtimeEnv.POLYPLACES_SEARCH_COUNTRY_CODES || 'gb';
 const SEARCH_VIEWBOX = runtimeEnv.POLYPLACES_SEARCH_VIEWBOX || '-8.7,60.9,1.9,49.8';
 
 let storeInited = false;
+let _checkZoomOverlap = null; // set by initFrameControls, called by redrawFrame
 let products = [];
 let selectedProduct = null;
 let handleIcon = null;
@@ -1108,7 +1109,10 @@ function redrawFrame() {
   }
 
   const frameControlsEl = document.getElementById('frame-controls');
-  if (frameControlsEl) frameControlsEl.hidden = false;
+  if (frameControlsEl && frameControlsEl.hidden) {
+    frameControlsEl.hidden = false;
+    if (_checkZoomOverlap) _checkZoomOverlap();
+  }
 }
 
 function moveFromHandle(newHandleLl, updateLocation = true) {
@@ -1608,6 +1612,8 @@ function initFrameControls() {
   const rotBtn = document.getElementById('rotation-btn');
   const zoomSlider = document.getElementById('zoom-slider');
   const zoomVal = document.getElementById('zoom-val');
+  const controlsEl = document.getElementById('frame-controls');
+  const zoomToggleBtn = document.getElementById('zoom-toggle-btn');
 
   if (rotBtn) {
     rotBtn.addEventListener('click', () => {
@@ -1630,6 +1636,58 @@ function initFrameControls() {
         resetReviewState();
         redrawFrame();
         updateLocationDisplay();
+      }
+    });
+  }
+
+  // Collapse zoom into a toggle button when it would overlap the search bar
+  if (controlsEl && zoomToggleBtn) {
+    const searchEl = document.querySelector('.map-search');
+    const mapEl = document.querySelector('.config-map');
+    let _overlapLocked = false;
+
+    function checkZoomOverlap() {
+      if (_overlapLocked || controlsEl.hidden || !searchEl) return;
+      _overlapLocked = true;
+
+      // Temporarily uncollapse to measure the full-width controls accurately
+      const wasCollapsed = controlsEl.classList.contains('zoom-collapsed');
+      controlsEl.classList.remove('zoom-collapsed', 'zoom-open');
+
+      const searchRect = searchEl.getBoundingClientRect();
+      const controlsRect = controlsEl.getBoundingClientRect();
+      const overlapping = searchRect.right + 12 >= controlsRect.left;
+
+      if (overlapping) {
+        controlsEl.classList.add('zoom-collapsed');
+        if (wasCollapsed) {
+          // Restore open state only if the panel should remain open
+          // (don't re-open on map resize — just keep it closed)
+        }
+      }
+      // else: already uncollapsed by classList.remove above
+
+      // Release lock after pending resize callbacks from our DOM changes have fired
+      requestAnimationFrame(() => { _overlapLocked = false; });
+    }
+
+    _checkZoomOverlap = checkZoomOverlap;
+
+    if (mapEl) {
+      const ro = new ResizeObserver(checkZoomOverlap);
+      ro.observe(mapEl);
+    }
+
+    zoomToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = controlsEl.classList.toggle('zoom-open');
+      zoomToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (controlsEl.classList.contains('zoom-open') && !controlsEl.contains(e.target)) {
+        controlsEl.classList.remove('zoom-open');
+        zoomToggleBtn.setAttribute('aria-expanded', 'false');
       }
     });
   }

@@ -575,6 +575,24 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
   opacity:0.35;cursor:not-allowed;color:var(--light);border-color:var(--border);
   background:transparent;
 }
+/* Zoom collapse: toggle button hidden by default; slider group visible */
+.zoom-toggle-btn{display:none}
+.zoom-slider-group{display:flex;align-items:center;gap:8px}
+/* Collapsed state: show toggle button, hide inline slider */
+.frame-controls.zoom-collapsed .zoom-toggle-btn{display:flex}
+.frame-controls.zoom-collapsed .zoom-slider-group{display:none}
+/* Expanded panel (dropdown) when collapsed+open */
+.frame-controls.zoom-collapsed.zoom-open .zoom-slider-group{
+  display:flex;align-items:center;gap:8px;
+  position:absolute;top:calc(100% + 6px);right:0;
+  background:rgba(255,255,255,0.96);border:1px solid var(--border);
+  border-radius:999px;padding:5px 10px 5px 8px;
+  box-shadow:0 4px 18px rgba(26,23,20,0.12);backdrop-filter:blur(8px);
+  white-space:nowrap;
+}
+.frame-controls.zoom-collapsed .zoom-toggle-btn[aria-expanded="true"]{
+  background:var(--accent-bg);border-color:var(--accent);color:var(--accent);
+}
 @media(max-width:640px){
   .frame-controls{top:72px;right:8px;padding:4px 8px 4px 5px;gap:5px}
   .frame-ctrl-range{width:70px}
