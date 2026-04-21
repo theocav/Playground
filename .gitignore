@@ -1,7 +1,0 @@
-backend/node_modules/
-frontend/node_modules/
-backend/.env
-frontend/.env
-.env
-assets/js/env.js
-.DS_Store
