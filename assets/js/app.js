@@ -221,15 +221,17 @@ function renderSizeOptions() {
     const frames = product.frameKey ? (frameOptions[product.frameKey] ?? null) : null;
     const frameOptsHtml = frames && frames.length > 0 ? `
       <div class="frame-opts" hidden>
-        <div class="frame-opts-header">
-          <label class="frame-toggle-label">
-            <input type="checkbox" class="frame-toggle" data-product-id="${product.id}" />
-            <span>Add frame</span>
-          </label>
-        </div>
-        <div class="frame-colour-selector" hidden>
-          <div class="frame-colours-header">Choose colour</div>
+        <div class="frame-colour-selector">
+          <div class="frame-colours-header">Frame</div>
           <div class="frame-colour-boxes">
+            <div class="frame-colour-box">
+              <input type="radio" id="frame-colour-none-${product.id}" name="frame-colour-${product.id}" value="" class="frame-colour-radio" checked />
+              <label for="frame-colour-none-${product.id}" class="frame-colour-label">
+                <span class="frame-colour-swatch frame-colour-swatch--none"></span>
+                <div class="frame-colour-name">No frame</div>
+                <div class="frame-colour-price">&nbsp;</div>
+              </label>
+            </div>
             ${frames.map(frame => `
               <div class="frame-colour-box">
                 <input type="radio" id="frame-colour-${frame.priceId}-${product.id}" name="frame-colour-${product.id}" value="${frame.priceId}" class="frame-colour-radio" />
@@ -262,33 +264,14 @@ function renderSizeOptions() {
     };
 
     if (frames && frames.length > 0) {
-      const frameToggle = btn.querySelector('.frame-toggle');
-      const colourSelector = btn.querySelector('.frame-colour-selector');
       const colourRadios = btn.querySelectorAll('.frame-colour-radio');
-
-      if (frameToggle) {
-        frameToggle.addEventListener('change', (e) => {
-          e.stopPropagation();
-          if (colourSelector) {
-            colourSelector.hidden = !e.target.checked;
-            // Auto-select first colour if enabling
-            if (e.target.checked && colourRadios.length > 0 && !colourRadios[0].checked) {
-              colourRadios[0].checked = true;
-              if (selectedProduct?.id === product.id) {
-                handleFrameChange(product, colourRadios[0].value, true);
-              }
-            } else if (!e.target.checked && selectedProduct?.id === product.id) {
-              handleFrameChange(product, null, false);
-            }
-          }
-        });
-      }
 
       colourRadios.forEach((radio) => {
         radio.addEventListener('change', (e) => {
           e.stopPropagation();
-          if (selectedProduct?.id === product.id && frameToggle?.checked) {
-            handleFrameChange(product, radio.value, true);
+          if (selectedProduct?.id === product.id) {
+            const value = radio.value || null;
+            handleFrameChange(product, value, !!value);
           }
         });
       });
@@ -328,10 +311,8 @@ function selectProduct(product) {
     selectedFrame = null;
     document.querySelectorAll('.frame-opts').forEach((el) => {
       el.hidden = true;
-      const toggle = el.querySelector('.frame-toggle');
-      const selector = el.querySelector('.frame-colour-selector');
-      if (toggle) toggle.checked = false;
-      if (selector) selector.hidden = true;
+      const noneRadio = el.querySelector('.frame-colour-radio[value=""]');
+      if (noneRadio) noneRadio.checked = true;
     });
   }
   // Reveal frame options for the newly selected product (not custom).
