@@ -511,10 +511,14 @@ async function loadProducts() {
       });
     }
     renderSizeOptions();
+    const loadingEl = document.getElementById('store-size-loading');
+    if (loadingEl) loadingEl.hidden = true;
     return products;
   } catch {
     products = sanitizeProductList(fallbackProducts.slice());
     renderSizeOptions();
+    const loadingEl = document.getElementById('store-size-loading');
+    if (loadingEl) loadingEl.hidden = true;
     return [];
   }
 }
