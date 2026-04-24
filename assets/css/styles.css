@@ -494,6 +494,9 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
   .config-left,.config-right{border:none;border-bottom:1px solid var(--border)}
   #store-map{min-height:420px}
   .cart-drawer{width:100%}
+  .map-search{
+    left:16px;right:auto;transform:none;max-width:calc(100% - 32px - 180px);
+  }
 }
 
 @media(max-width:640px){
@@ -542,6 +545,7 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
   }
   .map-search input{width:100%}
   .map-hint{white-space:normal;max-width:calc(100% - 32px);text-align:center}
+  .frame-controls{top:16px;right:16px}
   .order-cta{
     position:sticky;bottom:0;z-index:5;background:var(--white);
     margin:0 -20px;padding:12px 20px 8px;border-top:1px solid var(--border);
