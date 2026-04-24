@@ -25,7 +25,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <link rel="stylesheet" href="../assets/css/styles.css?v=db837032"/>
+  <link rel="stylesheet" href="../assets/css/styles.css?v=96d199b0"/>
 </head>
 <body>
 
@@ -105,33 +105,36 @@
       <div class="config-map">
         <div id="store-map"></div>
         <div class="map-toolbar">
+          <div class="map-toolbar-spacer" aria-hidden="true"></div>
           <div class="map-search">
             <label class="sr-only" for="map-search-input">Search for a place</label>
             <input id="map-search-input" type="search" placeholder="Search for a place" autocomplete="off"/>
             <button id="map-search-btn" type="button">Search</button>
             <div class="map-search-results" id="map-search-results" role="listbox" aria-label="Search results" aria-live="polite" aria-hidden="true"></div>
           </div>
-          <div class="frame-controls" id="frame-controls" hidden>
-          <button type="button" id="rotation-btn" class="frame-rotate-btn" aria-pressed="false">
-            <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-            Rotate
-          </button>
-          <div class="frame-ctrl-vsep" id="frame-ctrl-divider"></div>
-          <div class="frame-ctrl">
-            <button type="button" id="zoom-toggle-btn" class="zoom-toggle-btn frame-rotate-btn" aria-expanded="false" aria-label="Toggle zoom control">
-              <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
-              Zoom
-            </button>
-            <div class="zoom-slider-group">
-              <label class="frame-ctrl-label" for="zoom-slider">
-                <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
-                Zoom
-              </label>
-              <input type="range" id="zoom-slider" min="0.7" max="1.3" step="0.1" value="1" class="frame-ctrl-range" aria-label="Frame zoom level"/>
-              <span class="frame-ctrl-val" id="zoom-val">1.0×</span>
+          <div class="map-toolbar-end">
+            <div class="frame-controls" id="frame-controls" hidden>
+              <button type="button" id="rotation-btn" class="frame-rotate-btn" aria-pressed="false">
+                <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                Rotate
+              </button>
+              <div class="frame-ctrl-vsep" id="frame-ctrl-divider"></div>
+              <div class="frame-ctrl">
+                <button type="button" id="zoom-toggle-btn" class="zoom-toggle-btn frame-rotate-btn" aria-expanded="false" aria-label="Toggle zoom control">
+                  <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
+                  Zoom
+                </button>
+                <div class="zoom-slider-group">
+                  <label class="frame-ctrl-label" for="zoom-slider">
+                    <svg class="frame-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
+                    Zoom
+                  </label>
+                  <input type="range" id="zoom-slider" min="0.7" max="1.3" step="0.1" value="1" class="frame-ctrl-range" aria-label="Frame zoom level"/>
+                  <span class="frame-ctrl-val" id="zoom-val">1.0×</span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         </div>
         <div class="map-hint-sentinel" id="map-hint-sentinel" aria-hidden="true"></div>
         <div class="map-hint" id="map-hint">Select a scale to place your frame</div>
@@ -206,6 +209,6 @@
 
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script defer src="../assets/js/env.js?v=e57c473f"></script>
-<script defer src="../assets/js/app.js?v=f451f6a4"></script>
+<script defer src="../assets/js/app.js?v=d12b7ad8"></script>
 </body>
 </html>

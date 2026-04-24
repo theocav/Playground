@@ -1017,6 +1017,14 @@ function animateBBoxTo(targetBBox, durationMs = 420) {
 function createBBox(c, icon) {
   frameCenter = { lat: c.lat, lng: c.lng };
   if (icon) handleIcon = icon;
+
+  const frameControlsEl = document.getElementById('frame-controls');
+  if (frameControlsEl && frameControlsEl.hidden) {
+    frameControlsEl.hidden = false;
+    frameControlsEl.removeAttribute('hidden');
+    if (_checkZoomOverlap) _checkZoomOverlap();
+  }
+
   redrawFrame();
   updateLocationDisplay();
 }
