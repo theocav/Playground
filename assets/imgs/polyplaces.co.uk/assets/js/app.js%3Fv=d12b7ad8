@@ -1,0 +1,1668 @@
+document.body.classList.add('js');
+
+const prefersReducedMotion = window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  : false;
+
+const runtimeEnv = window.__POLYPLACES_ENV__ || {};
+
+if (prefersReducedMotion) {
+  document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in'));
+} else {
+  const obs = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          obs.unobserve(e.target);
+        }
+      });
+    },
+    { threshold: 0.1 }
+  );
+
+  document.querySelectorAll('.reveal').forEach((el) => obs.observe(el));
+}
+
+const _hintSentinel = document.getElementById('map-hint-sentinel');
+const _mapHint = document.getElementById('map-hint');
+if (_hintSentinel && _mapHint) {
+  new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => _mapHint.classList.toggle('is-docked', e.isIntersecting));
+    },
+    { threshold: 0 }
+  ).observe(_hintSentinel);
+}
+
+const cartStorageKey = 'polyplaces_cart_v1';
+const apiBase =
+  String(
+    runtimeEnv.POLYPLACES_API_BASE_URL ||
+      document.querySelector('meta[name="api-base"]')?.getAttribute('content') ||
+      ''
+  ).replace(/\/$/, '');
+const NOMINATIM_SEARCH_URL =
+  String(runtimeEnv.POLYPLACES_NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search').replace(
+    /\/$/,
+    ''
+  );
+const SEARCH_COUNTRY_CODES = runtimeEnv.POLYPLACES_SEARCH_COUNTRY_CODES || 'gb';
+const SEARCH_VIEWBOX = runtimeEnv.POLYPLACES_SEARCH_VIEWBOX || '-8.7,60.9,1.9,49.8';
+
+let storeInited = false;
+let _checkZoomOverlap = null; // set by initFrameControls, called by redrawFrame
+let products = [];
+let selectedProduct = null;
+let handleIcon = null;
+let cartFocusCleanup = null;
+let navFocusCleanup = null;
+let lastCartFocus = null;
+
+const PRODUCT_ID_BLACKLIST = new Set(['district']);
+
+function sanitizeProductList(list) {
+  const input = Array.isArray(list) ? list : [];
+  return input.filter(
+    (product) => product && !PRODUCT_ID_BLACKLIST.has(String(product.id)),
+  );
+}
+
+const productMeta = {
+  neighbourhood: { artSize: '20\u00D720cm', badge: 'Most popular' },
+  portrait:      { artSize: '20\u00D728cm', badge: 'Best for gifting' },
+  quarter:       { artSize: '40\u00D740cm', badge: null },
+};
+
+// Frame add-on options keyed by frameKey (small, medium, large, etc.).
+// Each entry is an array of frame choices with colour metadata; populated from API.
+let frameOptions = {};
+let selectedFrame = null; // null | priceId of the selected frame (null = no frame selected)
+
+// Custom size configuration.
+const CUSTOM_SIZE_MIN_MM = 100;
+const CUSTOM_SIZE_MAX_MM = 330;
+const CUSTOM_SIZE_LARGE_THRESHOLD_MM = 300; // above this, we show a warning about large sizes
+const CUSTOM_MAP_SCALE = 3; // 1 mm of print = 3 m of map coverage
+
+function getFocusableElements(container) {
+  if (!container) return [];
+  return Array.from(
+    container.querySelectorAll(
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )
+  ).filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  });
+}
+
+function createFocusTrap(container, onClose) {
+  const handler = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose?.();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+
+    const focusables = getFocusableElements(container);
+    if (focusables.length === 0) {
+      e.preventDefault();
+      container?.focus?.();
+      return;
+    }
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+      return;
+    }
+    if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  document.addEventListener('keydown', handler);
+  return () => document.removeEventListener('keydown', handler);
+}
+
+function showCheckoutBanner() {
+  const banner = document.getElementById('checkout-banner');
+  const textEl = document.getElementById('checkout-banner-text');
+  const closeBtn = document.getElementById('checkout-banner-close');
+  if (!banner || !textEl || !closeBtn) return;
+
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('checkout');
+  if (!status) return;
+
+  const messages = {
+    success: 'Payment successful. We have received your order.',
+    fail: 'Payment failed. Please try again or use a different card.',
+    abort: 'Checkout cancelled. You can resume anytime from your cart.',
+  };
+  const message = messages[status] || 'Checkout updated.';
+
+  banner.classList.add('show');
+  banner.classList.add(`is-${status}`);
+  banner.setAttribute('aria-hidden', 'false');
+  textEl.textContent = message;
+
+  if (status === 'success') {
+    // Stripe returned successfully; clear the cart so users don't accidentally repurchase.
+    clearCart();
+  }
+
+  closeBtn.onclick = () => {
+    banner.classList.remove('show', 'is-success', 'is-fail', 'is-abort');
+    banner.setAttribute('aria-hidden', 'true');
+  };
+
+  if (window.history && window.history.replaceState) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('checkout');
+    window.history.replaceState({}, '', url);
+  }
+}
+
+function showBanner(message, type = 'fail') {
+  const banner = document.getElementById('checkout-banner');
+  const textEl = document.getElementById('checkout-banner-text');
+  const closeBtn = document.getElementById('checkout-banner-close');
+  if (!banner || !textEl || !closeBtn) return;
+  textEl.textContent = message;
+  banner.className = `checkout-banner show is-${type}`;
+  banner.setAttribute('aria-hidden', 'false');
+  closeBtn.onclick = () => {
+    banner.classList.remove('show', 'is-success', 'is-fail', 'is-abort');
+    banner.setAttribute('aria-hidden', 'true');
+  };
+}
+
+function formatPriceFromAmount(amount) {
+  if (amount === null || typeof amount === 'undefined') return '\u00A3\u2014';
+  const value = Number(amount) / 100;
+  if (!Number.isFinite(value)) return '\u00A3\u2014';
+  return `\u00A3${value.toFixed(0)}`;
+}
+
+function renderSizeOptions() {
+  const container = document.getElementById('size-options');
+  const empty = document.getElementById('size-options-empty');
+  const loadingEl = document.getElementById('store-size-loading');
+
+  if (!container || !empty) return;
+  container.innerHTML = '';
+
+  if (products.length === 0) {
+    empty.textContent = 'No sizes available right now.';
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  empty.classList.add('hidden');
+  products.forEach((product) => {
+    const btn = document.createElement('div');
+    btn.className = 'size-opt';
+    btn.dataset.productId = product.id;
+    const meta = productMeta[product.id] || {};
+    const badge = meta.badge ? `<span class="size-opt-badge">${meta.badge}</span>` : '';
+    const artSize = meta.artSize ? ` &middot; <span class="size-opt-art">${meta.artSize}</span>` : '';
+
+    const frames = product.frameKey ? (frameOptions[product.frameKey] ?? null) : null;
+    const frameOptsHtml = frames && frames.length > 0 ? `
+      <div class="frame-opts" hidden>
+        <div class="frame-colour-selector">
+          <div class="frame-colours-header">Frame</div>
+          <div class="frame-colour-boxes">
+            <div class="frame-colour-box">
+              <input type="radio" id="frame-colour-none-${product.id}" name="frame-colour-${product.id}" value="" class="frame-colour-radio" checked />
+              <label for="frame-colour-none-${product.id}" class="frame-colour-label">
+                <span class="frame-colour-swatch frame-colour-swatch--none"></span>
+                <div class="frame-colour-name">No frame</div>
+                <div class="frame-colour-price">&nbsp;</div>
+              </label>
+            </div>
+            ${frames.map(frame => `
+              <div class="frame-colour-box">
+                <input type="radio" id="frame-colour-${frame.priceId}-${product.id}" name="frame-colour-${product.id}" value="${frame.priceId}" class="frame-colour-radio" />
+                <label for="frame-colour-${frame.priceId}-${product.id}" class="frame-colour-label">
+                  <span class="frame-colour-swatch" style="background-color:${frame.colourHex}" title="${frame.colourName}"></span>
+                  <div class="frame-colour-name">${frame.colourName}</div>
+                  ${frame.unitAmount ? `<div class="frame-colour-price">+${formatPriceFromAmount(frame.unitAmount)}</div>` : ''}
+                </label>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    ` : '';
+
+    btn.innerHTML = `
+      <div class="size-opt-top">
+        <div class="size-opt-info">
+          <div class="size-opt-name-row"><div class="size-opt-name">${product.name}</div>${badge}</div>
+          <div class="size-opt-sub">${product.displaySize}${artSize}</div>
+        </div>
+        <div class="size-opt-price">${formatPriceFromAmount(product.unitAmount)}</div>
+      </div>
+      ${frameOptsHtml}
+    `;
+
+    btn.onclick = (e) => {
+      if (e.target.closest('.frame-opts')) return;
+      selectProduct(product);
+    };
+
+    if (frames && frames.length > 0) {
+      const colourRadios = btn.querySelectorAll('.frame-colour-radio');
+
+      colourRadios.forEach((radio) => {
+        radio.addEventListener('change', (e) => {
+          e.stopPropagation();
+          if (selectedProduct?.id === product.id) {
+            const value = radio.value || null;
+            handleFrameChange(product, value, !!value);
+          }
+        });
+      });
+    }
+
+    container.appendChild(btn);
+  });
+
+  // Custom size option — always appended last; no frame option.
+  const customBtn = document.createElement('div');
+  customBtn.className = 'size-opt size-opt-custom';
+  customBtn.dataset.productId = 'custom';
+  customBtn.innerHTML = `
+    <div class="size-opt-top">
+      <div class="size-opt-info">
+        <div class="size-opt-name-row"><div class="size-opt-name">Custom</div></div>
+        <div class="size-opt-sub">Up to ${CUSTOM_SIZE_MAX_MM}\u00D7${CUSTOM_SIZE_MAX_MM}mm</div>
+      </div>
+      <div class="size-opt-price size-opt-price-custom">&darr; Set size</div>
+    </div>
+  `;
+  customBtn.onclick = () => activateCustomSize();
+  container.appendChild(customBtn);
+}
+
+function selectProduct(product) {
+  if (!product) return;
+  const isNewProduct = !selectedProduct || selectedProduct.id !== product.id;
+  const prevBBox = bbox ? { ...bbox } : null;
+  const prevCenter = prevBBox
+    ? { lat: (prevBBox.south + prevBBox.north) / 2, lng: (prevBBox.west + prevBBox.east) / 2 }
+    : null;
+  selectedProduct = product;
+
+  // Reset frame selection when switching to a different product.
+  if (isNewProduct) {
+    selectedFrame = null;
+    document.querySelectorAll('.frame-opts').forEach((el) => {
+      el.hidden = true;
+      const noneRadio = el.querySelector('.frame-colour-radio[value=""]');
+      if (noneRadio) noneRadio.checked = true;
+    });
+  }
+  // Reveal frame options for the newly selected product (not custom).
+  if (product.id !== 'custom' && (frameOptions[product.frameKey]?.length > 0)) {
+    const activeFrameOpts = document.querySelector(`.size-opt[data-product-id="${product.id}"] .frame-opts`);
+    if (activeFrameOpts) activeFrameOpts.hidden = false;
+  }
+
+  // Reset frame controls for the new product.
+  frameRotation = 0;
+  frameZoom = 1.0;
+  const rotBtn = document.getElementById('rotation-btn');
+  const zoomSlider = document.getElementById('zoom-slider');
+  const zoomVal = document.getElementById('zoom-val');
+  if (rotBtn) rotBtn.setAttribute('aria-pressed', 'false');
+  if (zoomSlider) zoomSlider.value = '1';
+  if (zoomVal) zoomVal.textContent = '1.0\u00D7';
+
+  // Disable rotate button for square products and custom sizes.
+  const isSquare = Math.abs((Number(product.aspectRatio) || 1) - 1) < 0.01;
+  if (rotBtn) rotBtn.disabled = isSquare || product.id === 'custom';
+
+  document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
+  const activeBtn = document.querySelector(`.size-opt[data-product-id="${product.id}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  // Show or hide the custom size inputs panel.
+  const customPanel = document.getElementById('custom-size-panel');
+  if (customPanel) customPanel.hidden = product.id !== 'custom';
+
+  // Show or hide the frame line in the order summary.
+  const frameLine = document.getElementById('order-frame-line');
+  const frameVal = document.getElementById('order-frame');
+  if (frameLine) {
+    frameLine.hidden = product.id === 'custom' || !(frameOptions[product.frameKey]?.length > 0);
+    if (frameVal && isNewProduct) frameVal.textContent = 'No frame';
+  }
+
+  if (layerGroup) layerGroup.clearLayers();
+  resetReviewState();
+
+  document.getElementById('sel-run').disabled = true;
+  document.getElementById('map-hint').textContent = 'Placing your frame…';
+
+  document.getElementById('order-scale').textContent = `${product.name} \u00B7 ${product.displaySize}`;
+  document.getElementById('order-price').textContent = formatPriceFromAmount(getEffectiveUnitAmount(product, selectedFrame));
+
+  // Place (or morph) the frame immediately at the center of the current viewport.
+  if (map && handleIcon) {
+    const center = prevCenter || map.getCenter();
+    const nextBBox = computeBBoxForProduct(center, product);
+    if (nextBBox) {
+      if (prevBBox && bboxLayer && handle) {
+        animateBBoxTo(nextBBox, 420);
+      } else {
+        createBBox(center, handleIcon);
+      }
+      document.getElementById('sel-run').disabled = false;
+      document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+      document.getElementById('order-status-msg').textContent = 'Adjust the frame, then add to cart.';
+    } else {
+      document.getElementById('order-status-msg').textContent = 'Unable to place the frame for this size.';
+      document.getElementById('map-hint').textContent = 'Select a different size';
+    }
+  } else {
+    document.getElementById('order-status-msg').textContent =
+      'Select a scale to place your frame.';
+    document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
+  }
+}
+
+function getEffectiveUnitAmount(product, frameValue) {
+  if (!product) return null;
+  const amount = product.unitAmount != null ? Number(product.unitAmount) : null;
+  if (frameValue && amount != null) {
+    const frames = product.frameKey ? (frameOptions[product.frameKey] ?? null) : null;
+    const frame = frames?.find(f => f.priceId === frameValue);
+    if (frame) return amount + frame.unitAmount;
+  }
+  return amount;
+}
+
+function handleFrameChange(product, frameValue, isEnabled) {
+  selectedFrame = frameValue;
+  document.getElementById('order-price').textContent = formatPriceFromAmount(getEffectiveUnitAmount(product, frameValue));
+  const frames = product.frameKey ? (frameOptions[product.frameKey] ?? null) : null;
+  const frame = frameValue ? frames?.find(f => f.priceId === frameValue) : null;
+  const frameVal = document.getElementById('order-frame');
+  if (frameVal) {
+    frameVal.textContent = frame ? `${frame.colourName}` : 'No frame';
+  }
+}
+
+async function loadProducts() {
+  try {
+    const res = await fetch(`${apiBase}/api/products`);
+    const data = await res.json();
+    const list = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : [];
+    products = sanitizeProductList(list);
+    // Merge frame options from API.
+    // Supports new framePrices format keyed by frameKey with colour metadata.
+    if (data?.framePrices && typeof data.framePrices === 'object') {
+      Object.entries(data.framePrices).forEach(([frameKey, framesArray]) => {
+        if (Array.isArray(framesArray) && framesArray.length > 0) {
+          const valid = framesArray.filter(f =>
+            f?.priceId &&
+            typeof f.unitAmount === 'number' &&
+            f.colourHex &&
+            f.colourName
+          );
+          if (valid.length > 0) {
+            frameOptions[frameKey] = valid.map(f => ({
+              priceId: f.priceId,
+              unitAmount: f.unitAmount,
+              colourHex: f.colourHex,
+              colourName: f.colourName,
+            }));
+          }
+        }
+      });
+    }
+    renderSizeOptions();
+    const loadingEl = document.getElementById('store-size-loading');
+    if (loadingEl) loadingEl.classList.add('hidden');
+    return products;
+  } catch {
+    renderSizeOptions();
+    const loadingEl = document.getElementById('store-size-loading');
+    if (loadingEl) loadingEl.classList.add('hidden');
+    return [];
+  }
+}
+
+async function initStore() {
+  if (storeInited) return;
+  storeInited = true;
+
+  const loadingEl = document.getElementById('store-size-loading');
+  const emptyEl = document.getElementById('size-options-empty');
+  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (emptyEl) emptyEl.classList.add('hidden');
+
+  await loadProducts();
+
+  if (loadingEl) loadingEl.classList.add('hidden');
+
+  initMap();
+  initCustomSizePanel();
+  initFrameControls();
+  initMobileInputFix();
+  if (selectedProduct) {
+    // If the user selected a size before the map finished initializing, re-run selection to auto-place the frame.
+    selectProduct(selectedProduct);
+    return;
+  }
+  if (products.length > 0) selectProduct(products[0]);
+}
+
+function setupMapSearch() {
+  const input = document.getElementById('map-search-input');
+  const button = document.getElementById('map-search-btn');
+  const resultsEl = document.getElementById('map-search-results');
+  if (!input || !button || !resultsEl) return;
+
+  let activeIndex = -1;
+  let activeResults = [];
+
+  const clearResults = () => {
+    resultsEl.innerHTML = '';
+    resultsEl.classList.remove('show');
+    resultsEl.setAttribute('aria-hidden', 'true');
+    activeIndex = -1;
+    activeResults = [];
+  };
+
+  const applyResult = (item) => {
+    const lat = Number(item?.lat);
+    const lon = Number(item?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    map.setView([lat, lon], Math.max(map.getZoom(), 14), { animate: false });
+
+    // After search, always center the frame on the new viewport center (if a product is selected).
+    if (selectedProduct && map && handleIcon) {
+      const center = map.getCenter();
+      const next = computeBBoxForProduct(center, selectedProduct);
+      if (next) {
+        if (bbox && bboxLayer && handle) {
+          animateBBoxTo(next, 420);
+        } else {
+          createBBox(center, handleIcon);
+        }
+        document.getElementById('sel-run').disabled = false;
+        document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+        document.getElementById('order-status-msg').textContent = 'Looking good! Adjust the frame then add to cart.';
+      }
+    }
+    clearResults();
+  };
+
+  const setActiveIndex = (nextIndex, { focus = false } = {}) => {
+    if (!Array.isArray(activeResults) || activeResults.length === 0) return;
+    const clamped = Math.max(0, Math.min(activeResults.length - 1, nextIndex));
+    activeIndex = clamped;
+    resultsEl.querySelectorAll('.map-search-result[role="option"]').forEach((el) => {
+      const idx = Number(el.dataset.index);
+      el.setAttribute('aria-selected', idx === activeIndex ? 'true' : 'false');
+    });
+    if (focus) {
+      const el = resultsEl.querySelector(`.map-search-result[data-index="${activeIndex}"]`);
+      el?.focus?.();
+    }
+  };
+
+  const renderResults = (items) => {
+    resultsEl.innerHTML = '';
+    if (!items || items.length === 0) {
+      const row = document.createElement('div');
+      row.className = 'map-search-result is-empty';
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', 'false');
+      row.textContent = 'No results found.';
+      resultsEl.appendChild(row);
+      resultsEl.classList.add('show');
+      resultsEl.setAttribute('aria-hidden', 'false');
+      activeIndex = -1;
+      activeResults = [];
+      return;
+    }
+    activeResults = items.slice();
+    activeIndex = 0;
+    items.forEach((item, idx) => {
+      const row = document.createElement('button');
+      row.className = 'map-search-result';
+      row.type = 'button';
+      row.dataset.index = String(idx);
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', idx === activeIndex ? 'true' : 'false');
+      row.innerHTML = `<strong>${item.display_name}</strong>`;
+      row.onclick = () => applyResult(item);
+      row.onmouseenter = () => setActiveIndex(idx);
+      row.onfocus = () => setActiveIndex(idx);
+      resultsEl.appendChild(row);
+    });
+    resultsEl.classList.add('show');
+    resultsEl.setAttribute('aria-hidden', 'false');
+  };
+
+  const runSearch = async (autoSelectTop = false) => {
+    const query = input.value.trim();
+    if (!query) {
+      clearResults();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Searching\u2026';
+    try {
+      const url = new URL(NOMINATIM_SEARCH_URL);
+      url.searchParams.set('format', 'jsonv2');
+      url.searchParams.set('q', query);
+      url.searchParams.set('limit', '6');
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('countrycodes', SEARCH_COUNTRY_CODES);
+      url.searchParams.set('bounded', '1');
+      url.searchParams.set('viewbox', SEARCH_VIEWBOX);
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      const results = Array.isArray(data) ? data : [];
+      if (autoSelectTop && results.length > 0) {
+        applyResult(results[0]);
+        return;
+      }
+      renderResults(results);
+    } catch {
+      renderResults([]);
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Search';
+    }
+  };
+
+  button.onclick = () => runSearch(false);
+  input.onkeydown = (e) => {
+    const isOpen = resultsEl.classList.contains('show');
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isOpen && activeIndex >= 0 && activeResults[activeIndex]) {
+        applyResult(activeResults[activeIndex]);
+        return;
+      }
+      runSearch(true);
+    }
+    if (e.key === 'Escape') {
+      clearResults();
+    }
+    if (e.key === 'ArrowDown') {
+      if (!isOpen || activeResults.length === 0) return;
+      e.preventDefault();
+      setActiveIndex(activeIndex + 1, { focus: true });
+    }
+    if (e.key === 'ArrowUp') {
+      if (!isOpen || activeResults.length === 0) return;
+      e.preventDefault();
+      setActiveIndex(activeIndex - 1, { focus: true });
+    }
+  };
+
+  resultsEl.addEventListener('keydown', (e) => {
+    const isOpen = resultsEl.classList.contains('show');
+    if (!isOpen) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      clearResults();
+      input.focus();
+    }
+    if (e.key === 'ArrowDown') {
+      if (activeResults.length === 0) return;
+      e.preventDefault();
+      setActiveIndex(activeIndex + 1, { focus: true });
+    }
+    if (e.key === 'ArrowUp') {
+      if (activeResults.length === 0) return;
+      e.preventDefault();
+      setActiveIndex(activeIndex - 1, { focus: true });
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!resultsEl.classList.contains('show')) return;
+    if (e.target === input || resultsEl.contains(e.target) || e.target === button) return;
+    clearResults();
+  });
+}
+
+function showStore() {
+  window.location.href = '/store/';
+}
+
+function showLanding() {
+  window.location.href = '/';
+}
+
+let map, layerGroup, bbox, bboxLayer, handle;
+let selectionMeta = null;
+let cart = [];
+let cartPreviewMaps = new Map();
+let frameRotation = 0;   // degrees 0-359
+let frameZoom = 1.0;     // 0.7-1.3 geographic scale factor
+let frameCenter = null;  // { lat, lng } actual center of the frame
+let frameCorners = null; // [[lat,lng]×4] rotated corners currently drawn
+
+function initMap() {
+  const ukBounds = L.latLngBounds([49.8, -8.7], [60.9, 1.9]);
+  map = L.map('store-map', {
+    zoomControl: false,
+    maxBounds: ukBounds,
+    maxBoundsViscosity: 1.0,
+  }).setView([51.505, -0.09], 14);
+  L.control.zoom({ position: 'topleft' }).addTo(map);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '\u00A9 OpenStreetMap',
+  }).addTo(map);
+  layerGroup = L.layerGroup().addTo(map);
+
+  const hIcon = L.divIcon({
+    className: '',
+    html: `<div style="width:28px;height:28px;border-radius:50%;background:white;border:2.5px solid #c94f2c;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,0.2);cursor:grab"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c94f2c" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg></div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+  handleIcon = hIcon;
+  setupMapSearch();
+
+  document.getElementById('sel-run').onclick = reviewSelection;
+  document.getElementById('sel-clear').onclick = clearMap;
+
+  // No map click handler: frame placement is driven by the scale selector only (see selectProduct).
+
+  map.on('zoomend', () => {
+    if (!bbox) return;
+    if (map.getZoom() < 12) {
+      clearFrame();
+    }
+  });
+}
+
+function clearCart() {
+  cart = [];
+  try {
+    localStorage.removeItem(cartStorageKey);
+  } catch {
+    // ignore
+  }
+  renderCart();
+}
+
+function bboxToBounds(b) {
+  if (!b) return null;
+  const south = Number(b.south);
+  const west = Number(b.west);
+  const north = Number(b.north);
+  const east = Number(b.east);
+  if (![south, west, north, east].every(Number.isFinite)) return null;
+  return L.latLngBounds([south, west], [north, east]);
+}
+
+function syncCartPreviewMaps() {
+  if (typeof L === 'undefined') return;
+  const previewEls = Array.from(document.querySelectorAll('.cart-item-preview'));
+  const keep = new Set();
+  let cartMutated = false;
+
+  const resolveCartItemBBox = (item) => {
+    const existingBounds = bboxToBounds(item?.bbox);
+    if (existingBounds) return existingBounds;
+
+    // Back-compat: older carts may be missing `bbox`, but we can often recompute it from
+    // the stored `center` and known product dimensions.
+    const center = item?.center;
+    if (!center || !Number.isFinite(Number(center.lat)) || !Number.isFinite(Number(center.lng))) return null;
+
+    const resolvedProduct =
+      products.find((p) => String(p?.id) === String(item?.productId)) ||
+      fallbackProducts.find((p) => String(p?.id) === String(item?.productId));
+
+    // If we can't resolve a product entry (e.g., cart opened on pages where products
+    // aren't loaded), fall back to dimensions stored on the cart item itself.
+    const pseudoProduct = resolvedProduct
+      ? resolvedProduct
+      : {
+          sizeCode: item?.sizeCode,
+          aspectRatio: item?.aspectRatio,
+        };
+
+    const computed = computeBBoxForProduct({ lat: Number(center.lat), lng: Number(center.lng) }, pseudoProduct);
+    const computedBounds = bboxToBounds(computed);
+    if (!computedBounds) return null;
+
+    item.bbox = computed;
+    cartMutated = true;
+    return computedBounds;
+  };
+
+  previewEls.forEach((el) => {
+    const id = String(el.dataset.itemId || '');
+    const item = cart.find((i) => String(i?.id) === id);
+    if (!id) return;
+
+    const bounds = resolveCartItemBBox(item);
+    if (!bounds) {
+      // Older carts (or fallback data) may not include enough info to preview.
+      el.classList.add('is-fallback');
+      el.innerHTML = '<div class="cart-item-preview-fallback">Preview unavailable</div>';
+      return;
+    }
+
+    el.classList.remove('is-fallback');
+    keep.add(id);
+    const existing = cartPreviewMaps.get(id);
+    if (existing) {
+      const existingContainer = existing?.container || existing?.map?._container || null;
+      const containerDetached = existingContainer ? !document.body.contains(existingContainer) : true;
+      const containerMismatch = existingContainer ? existingContainer !== el : true;
+      if (containerDetached || containerMismatch) {
+        try {
+          existing.map.remove();
+        } catch {
+          // ignore
+        }
+        cartPreviewMaps.delete(id);
+      } else {
+      existing.rect.setBounds(bounds);
+      existing.map.fitBounds(bounds, { padding: [10, 10], animate: false });
+      existing.map.invalidateSize(false);
+      return;
+      }
+    }
+
+    // Ensure container is empty (Leaflet will inject its own DOM)
+    el.innerHTML = '';
+
+    const m = L.map(el, {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false,
+      tap: false,
+      touchZoom: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '\u00A9 OpenStreetMap',
+    }).addTo(m);
+
+    const rect = L.rectangle(bounds, {
+      color: '#c94f2c',
+      weight: 3,
+      fillColor: '#c94f2c',
+      fillOpacity: 0.12,
+      dashArray: '5 4',
+    }).addTo(m);
+
+    m.fitBounds(bounds, { padding: [10, 10], animate: false });
+
+    cartPreviewMaps.set(id, { map: m, rect, container: el });
+
+    // If the drawer is animating open, sizes can be wrong at first render.
+    setTimeout(() => {
+      try {
+        m.invalidateSize(false);
+        m.fitBounds(bounds, { padding: [10, 10], animate: false });
+      } catch {
+        // ignore
+      }
+    }, 80);
+    setTimeout(() => {
+      try {
+        m.invalidateSize(false);
+        m.fitBounds(bounds, { padding: [10, 10], animate: false });
+      } catch {
+        // ignore
+      }
+    }, 360);
+  });
+
+  for (const [id, entry] of cartPreviewMaps.entries()) {
+    if (keep.has(id)) continue;
+    try {
+      entry.map.remove();
+    } catch {
+      // ignore
+    }
+    cartPreviewMaps.delete(id);
+  }
+
+  if (cartMutated) {
+    try {
+      saveCart();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function mToLat(m) {
+  return m / 111320;
+}
+
+function mToLon(m, lat) {
+  return m / (111320 * Math.cos((lat * Math.PI) / 180));
+}
+
+function computeBBox(c) {
+  if (!selectedProduct) return null;
+  const width = Number(selectedProduct.sizeCode);
+  if (!Number.isFinite(width)) return null;
+  const ratio = Number(selectedProduct.aspectRatio);
+  const aspectRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const w = width;
+  const h = width * aspectRatio;
+  const dLat = mToLat(h / 2);
+  const dLon = mToLon(w / 2, c.lat);
+  return { south: c.lat - dLat, north: c.lat + dLat, west: c.lng - dLon, east: c.lng + dLon };
+}
+
+function computeBBoxForProduct(c, product) {
+  if (!product) return null;
+  const width = Number(product.sizeCode);
+  if (!Number.isFinite(width)) return null;
+  const ratio = Number(product.aspectRatio);
+  const aspectRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const w = width;
+  const h = width * aspectRatio;
+  const dLat = mToLat(h / 2);
+  const dLon = mToLon(w / 2, c.lat);
+  return { south: c.lat - dLat, north: c.lat + dLat, west: c.lng - dLon, east: c.lng + dLon };
+}
+
+// Compute 4 rotated corners (lat/lng) of the frame for a given center, product, rotation and zoom.
+// Corners are returned in order: top-left, top-right, bottom-right, bottom-left (rotated).
+function computeRotatedCorners(center, product, rotationDeg, zoom) {
+  if (!product || !center) return null;
+  const width = Number(product.sizeCode) * (zoom || 1);
+  if (!Number.isFinite(width) || width <= 0) return null;
+  const ratio = Number(product.aspectRatio);
+  const ar = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const w = width;       // east-west meters
+  const h = width * ar;  // north-south meters
+
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  // Local corners relative to center (x = east m, y = north m):
+  const local = [
+    { x: -w / 2, y:  h / 2 },  // top-left
+    { x:  w / 2, y:  h / 2 },  // top-right
+    { x:  w / 2, y: -h / 2 },  // bottom-right
+    { x: -w / 2, y: -h / 2 },  // bottom-left
+  ];
+
+  return local.map(({ x, y }) => {
+    const rx = x * cosR - y * sinR;  // rotated east offset
+    const ry = x * sinR + y * cosR;  // rotated north offset
+    return [
+      center.lat + mToLat(ry),
+      center.lng + mToLon(rx, center.lat),
+    ];
+  });
+}
+
+// Axis-aligned bounding box that encloses all polygon corners.
+function cornersToBBox(corners) {
+  const lats = corners.map((c) => c[0]);
+  const lngs = corners.map((c) => c[1]);
+  return {
+    south: Math.min(...lats),
+    north: Math.max(...lats),
+    west:  Math.min(...lngs),
+    east:  Math.max(...lngs),
+  };
+}
+
+// Return the index of the visually top-left (north-west) corner of a rotated polygon.
+// Picks the corner with the highest latitude; ties broken by lowest longitude.
+function findTopLeftCorner(corners) {
+  let best = 0;
+  for (let i = 1; i < corners.length; i++) {
+    const [clat, clng] = corners[i];
+    const [blat, blng] = corners[best];
+    if (clat > blat + 1e-10) { best = i; continue; }
+    if (Math.abs(clat - blat) < 1e-10 && clng < blng) { best = i; }
+  }
+  return best;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function setBBoxLive(next) {
+  bbox = next;
+  // During animation frameRotation is always 0, so corners == axis-aligned bbox corners.
+  frameCenter = {
+    lat: (next.south + next.north) / 2,
+    lng: (next.west + next.east) / 2,
+  };
+  frameCorners = [
+    [next.north, next.west],
+    [next.north, next.east],
+    [next.south, next.east],
+    [next.south, next.west],
+  ];
+  if (bboxLayer) {
+    bboxLayer.setLatLngs(frameCorners);
+  }
+  if (handle) handle.setLatLng(frameCorners[0]);
+}
+
+let bboxAnim = null;
+function animateBBoxTo(targetBBox, durationMs = 420) {
+  if (!bbox || !targetBBox) return;
+  if (bboxAnim) cancelAnimationFrame(bboxAnim);
+
+  const from = { ...bbox };
+  const start = performance.now();
+
+  if (bboxLayer) bboxLayer.setStyle({ dashArray: '0', fillOpacity: 0.04 });
+
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / durationMs);
+    const e = easeInOutCubic(t);
+    const next = {
+      south: lerp(from.south, targetBBox.south, e),
+      north: lerp(from.north, targetBBox.north, e),
+      west: lerp(from.west, targetBBox.west, e),
+      east: lerp(from.east, targetBBox.east, e),
+    };
+    setBBoxLive(next);
+
+    if (t < 1) {
+      bboxAnim = requestAnimationFrame(step);
+      return;
+    }
+
+    setBBoxLive(targetBBox);
+    if (bboxLayer) bboxLayer.setStyle({ dashArray: '6 4', fillOpacity: 0.05 });
+    updateLocationDisplay();
+    bboxAnim = null;
+  };
+
+  bboxAnim = requestAnimationFrame(step);
+}
+
+function createBBox(c, icon) {
+  frameCenter = { lat: c.lat, lng: c.lng };
+  if (icon) handleIcon = icon;
+
+  const frameControlsEl = document.getElementById('frame-controls');
+  if (frameControlsEl && frameControlsEl.hidden) {
+    frameControlsEl.hidden = false;
+    frameControlsEl.removeAttribute('hidden');
+    if (_checkZoomOverlap) _checkZoomOverlap();
+  }
+
+  redrawFrame();
+  updateLocationDisplay();
+}
+
+// Single function that (re)draws the polygon and handle from current frame state.
+function redrawFrame() {
+  if (!frameCenter || !selectedProduct || !map || !handleIcon) return;
+
+  const corners = computeRotatedCorners(frameCenter, selectedProduct, frameRotation, frameZoom);
+  if (!corners) return;
+
+  frameCorners = corners;
+  bbox = cornersToBBox(corners);
+
+  if (bboxLayer) {
+    bboxLayer.setLatLngs(corners);
+  } else {
+    bboxLayer = L.polygon(corners, {
+      color: '#c94f2c',
+      weight: 2,
+      fillColor: '#c94f2c',
+      fillOpacity: 0.05,
+      dashArray: '6 4',
+    }).addTo(map);
+  }
+
+  const handlePos = corners[findTopLeftCorner(corners)]; // visual top-left (NW)
+  if (handle) {
+    handle.setLatLng(handlePos);
+  } else {
+    handle = L.marker(handlePos, { draggable: true, icon: handleIcon }).addTo(map);
+    handle.on('dragstart', () => {
+      resetReviewState();
+    });
+    handle.on('drag', (e) => {
+      layerGroup.clearLayers();
+      moveFromHandle(e.target.getLatLng(), false);
+    });
+    handle.on('dragend', (e) => {
+      moveFromHandle(e.target.getLatLng(), true);
+    });
+  }
+
+  const frameControlsEl = document.getElementById('frame-controls');
+  if (frameControlsEl && frameControlsEl.hidden) {
+    frameControlsEl.hidden = false;
+    if (_checkZoomOverlap) _checkZoomOverlap();
+  }
+}
+
+function moveFromHandle(newHandleLl, updateLocation = true) {
+  if (!frameCenter || !frameCorners) return;
+  // Shift the center by the same delta the visual top-left corner moved.
+  const oldHandle = frameCorners[findTopLeftCorner(frameCorners)];
+  const deltaLat = newHandleLl.lat - oldHandle[0];
+  const deltaLng = newHandleLl.lng - oldHandle[1];
+  frameCenter = { lat: frameCenter.lat + deltaLat, lng: frameCenter.lng + deltaLng };
+  redrawFrame();
+  if (updateLocation) updateLocationDisplay();
+}
+
+function clearFrame() {
+  if (layerGroup) layerGroup.clearLayers();
+  resetReviewState();
+  if (bboxLayer) {
+    map.removeLayer(bboxLayer);
+    bboxLayer = null;
+  }
+  if (handle) {
+    map.removeLayer(handle);
+    handle = null;
+  }
+  bbox = null;
+  frameCenter = null;
+  frameCorners = null;
+  frameRotation = 0;
+  frameZoom = 1.0;
+  selectionMeta = null;
+  selectedFrame = null;
+  const _frameLine = document.getElementById('order-frame-line');
+  if (_frameLine) _frameLine.hidden = true;
+  const rotBtn = document.getElementById('rotation-btn');
+  const zoomSlider = document.getElementById('zoom-slider');
+  if (rotBtn) rotBtn.setAttribute('aria-pressed', 'false');
+  if (zoomSlider) zoomSlider.value = '1';
+  const zoomVal = document.getElementById('zoom-val');
+  if (zoomVal) zoomVal.textContent = '1.0\u00D7';
+  const frameControlsEl = document.getElementById('frame-controls');
+  if (frameControlsEl) frameControlsEl.hidden = true;
+  document.getElementById('sel-run').disabled = true;
+  document.getElementById('sel-run').textContent = 'Add to cart \u2192';
+  document.getElementById('order-status-msg').textContent =
+    'Select a scale to place your frame.';
+  document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
+}
+
+function clearMap() {
+  clearFrame();
+  document.getElementById('sel-run').disabled = true;
+  document.getElementById('sel-run').textContent = 'Add to cart \u2192';
+  document.getElementById('order-scale').textContent = '\u2014';
+  document.getElementById('order-price').textContent = '\u2014';
+  document.getElementById('order-status-msg').textContent =
+    'Choose a scale to place your frame.';
+  document.getElementById('map-hint').textContent = 'Select a scale to place your frame';
+  document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
+  selectedProduct = null;
+  const customPanel = document.getElementById('custom-size-panel');
+  if (customPanel) customPanel.hidden = true;
+}
+
+function updateLocationDisplay() {
+  if (!bbox) return;
+  const center = {
+    lat: (bbox.south + bbox.north) / 2,
+    lng: (bbox.west + bbox.east) / 2,
+  };
+  selectionMeta = {
+    center,
+    bbox,
+    rotation: frameRotation,
+    zoom: frameZoom,
+    locationText: null,
+  };
+  const btn = document.getElementById('sel-run');
+  if (btn && btn.textContent.includes('Added to cart')) {
+    btn.textContent = 'Add to cart \u2192';
+  }
+}
+
+
+function loadCart() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(cartStorageKey));
+    cart = Array.isArray(stored) ? stored : [];
+    cart = cart.filter((item) => item && item.priceId);
+  } catch {
+    cart = [];
+  }
+}
+
+function saveCart() {
+  localStorage.setItem(cartStorageKey, JSON.stringify(cart));
+}
+
+function formatPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '\u00A3\u2014';
+  return `\u00A3${n.toFixed(0)}`;
+}
+
+function renderCart() {
+  const cartItemsEl = document.getElementById('cart-items');
+  const cartCountEl = document.getElementById('cart-count');
+  const cartToggleEl = document.getElementById('cart-toggle');
+  const cartTotalEl = document.getElementById('cart-total');
+  const checkoutBtn = document.getElementById('cart-checkout');
+  if (!cartItemsEl || !cartCountEl || !cartTotalEl || !checkoutBtn) return;
+
+  cartItemsEl.innerHTML = '';
+  cartCountEl.textContent = String(cart.length);
+  if (cartToggleEl) {
+    const suffix = cart.length === 1 ? 'item' : 'items';
+    cartToggleEl.setAttribute('aria-label', `Open cart (${cart.length} ${suffix})`);
+  }
+
+  if (cart.length === 0) {
+    cartItemsEl.innerHTML = '<div class="cart-empty">Your cart is empty. Add a sculpture to continue.</div>';
+    cartTotalEl.textContent = '\u00A30';
+    checkoutBtn.disabled = true;
+    syncCartPreviewMaps();
+    return;
+  }
+  checkoutBtn.disabled = false;
+
+  let total = 0;
+  cart.forEach((item, idx) => {
+    const p = Number(item.price);
+    if (Number.isFinite(p)) total += p;
+    const itemEl = document.createElement('div');
+    itemEl.className = 'cart-item';
+    const labelLine = item.customLabel
+      ? `<div class="cart-item-meta cart-item-custom-label">${item.customLabel}</div><div class="cart-item-geo">${item.location}</div>`
+      : `<div class="cart-item-meta">${item.location}</div>`;
+    const frameLine = item.frame ? `<div class="cart-item-frame">${item.frameName || 'With frame'}</div>` : '';
+    itemEl.innerHTML = `
+      <div class="cart-item-preview" data-item-id="${item.id}"></div>
+      <div class="cart-item-title">${item.name}</div>
+      ${frameLine}
+      ${labelLine}
+      <div class="cart-item-row">
+        <div class="cart-item-price">${formatPrice(item.price)}</div>
+        <button type="button" class="cart-item-remove" data-index="${idx}">Remove</button>
+      </div>
+    `;
+    cartItemsEl.appendChild(itemEl);
+  });
+
+  cartTotalEl.textContent = formatPrice(total);
+  cartItemsEl.querySelectorAll('.cart-item-remove').forEach((btn) => {
+    btn.onclick = () => {
+      const index = Number(btn.dataset.index);
+      cart.splice(index, 1);
+      saveCart();
+      renderCart();
+    };
+  });
+
+  syncCartPreviewMaps();
+}
+
+function addSelectionToCart() {
+  if (!selectedProduct || !selectionMeta) return;
+  const id =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const frames = selectedProduct.frameKey ? (frameOptions[selectedProduct.frameKey] ?? null) : null;
+  const selectedFrameData = selectedFrame ? frames?.find(f => f.priceId === selectedFrame) : null;
+  const hasFrame = !!selectedFrameData && selectedProduct.id !== 'custom';
+  const frameUnitAmount = hasFrame ? selectedFrameData.unitAmount : 0;
+  const baseUnitAmount = Number.isFinite(Number(selectedProduct.unitAmount)) ? Number(selectedProduct.unitAmount) : 0;
+
+  const item = {
+    id,
+    productId: selectedProduct.id,
+    priceId: selectedProduct.priceId,
+    name: selectedProduct.name,
+    displaySize: selectedProduct.displaySize,
+    sizeCode: selectedProduct.sizeCode,
+    aspectRatio: selectedProduct.aspectRatio,
+    price: (baseUnitAmount + frameUnitAmount) / 100,
+    location: selectionMeta.locationText,
+    customLabel: (document.getElementById('custom-location-label')?.value || '').trim(),
+    bbox: selectionMeta.bbox,
+    center: selectionMeta.center,
+    rotation: selectionMeta.rotation || 0,
+    zoom: selectionMeta.zoom || 1,
+    frame: hasFrame,
+    framePriceId: hasFrame ? selectedFrameData.priceId : null,
+    frameUnitAmount,
+    frameName: hasFrame ? selectedFrameData.colourName : null,
+    ...(selectedProduct.id === 'custom' && {
+      customWidthMm: selectedProduct.customWidthMm,
+      customHeightMm: selectedProduct.customHeightMm,
+    }),
+  };
+  cart.push(item);
+  saveCart();
+  renderCart();
+}
+
+function openCart() {
+  const drawer = document.getElementById('cart-drawer');
+  const overlay = document.getElementById('cart-overlay');
+  const toggle = document.getElementById('cart-toggle');
+  const closeBtn = document.getElementById('cart-close');
+  if (!drawer) return;
+  if (document.body.classList.contains('cart-open')) return;
+
+  lastCartFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  document.body.classList.add('cart-open');
+  drawer.setAttribute('aria-hidden', 'false');
+  overlay?.setAttribute('aria-hidden', 'false');
+  toggle?.setAttribute('aria-expanded', 'true');
+  cartFocusCleanup?.();
+  cartFocusCleanup = createFocusTrap(drawer, closeCart);
+  if (closeBtn) closeBtn.focus();
+  else drawer.focus();
+  syncCartPreviewMaps();
+  // Re-sync after the slide-in transition so Leaflet has the final layout box.
+  setTimeout(syncCartPreviewMaps, 320);
+  setTimeout(syncCartPreviewMaps, 700);
+}
+
+function closeCart() {
+  const drawer = document.getElementById('cart-drawer');
+  const overlay = document.getElementById('cart-overlay');
+  const toggle = document.getElementById('cart-toggle');
+  if (!drawer) return;
+  if (!document.body.classList.contains('cart-open')) return;
+
+  document.body.classList.remove('cart-open');
+  drawer.setAttribute('aria-hidden', 'true');
+  overlay?.setAttribute('aria-hidden', 'true');
+  toggle?.setAttribute('aria-expanded', 'false');
+  cartFocusCleanup?.();
+  cartFocusCleanup = null;
+  if (lastCartFocus && document.documentElement.contains(lastCartFocus)) lastCartFocus.focus();
+  lastCartFocus = null;
+}
+
+async function checkoutCart() {
+  if (cart.length === 0) return;
+
+  // Validate frame selections
+  if (cart.some((i) => i.frame && !i.framePriceId)) {
+    showBanner('Please select a frame colour for all items with frames.', 'fail');
+    return;
+  }
+
+  if (
+    cart.some((i) => String(i?.priceId || '').startsWith('fallback_')) ||
+    cart.some((i) => i.frame && String(i?.framePriceId || '').startsWith('fallback_'))
+  ) {
+    showBanner('Checkout is temporarily unavailable. Please try again shortly.', 'fail');
+    return;
+  }
+  const checkoutBtn = document.getElementById('cart-checkout');
+  checkoutBtn.disabled = true;
+  checkoutBtn.textContent = 'Redirecting...';
+  try {
+    const res = await fetch(`${apiBase}/api/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: cart.map((item) => ({
+          ...item,
+          ...(item.frame && item.framePriceId ? { framePriceId: item.framePriceId } : {}),
+        })),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.url) throw new Error(data.error || 'Checkout failed');
+    window.location.href = data.url;
+  } catch (err) {
+    showBanner(err.message || 'Unable to start checkout. Please try again.', 'fail');
+  } finally {
+    checkoutBtn.disabled = false;
+    checkoutBtn.textContent = 'Checkout securely with Stripe';
+  }
+}
+
+function initCartUI() {
+  loadCart();
+  renderCart();
+  document.getElementById('cart-toggle').onclick = openCart;
+  document.getElementById('cart-close').onclick = closeCart;
+  document.getElementById('cart-overlay').onclick = closeCart;
+  document.getElementById('cart-checkout').onclick = checkoutCart;
+}
+
+function initNavUI() {
+  const toggle = document.getElementById('nav-toggle');
+  const drawer = document.getElementById('nav-drawer');
+  const overlay = document.getElementById('nav-overlay');
+  if (!toggle || !drawer || !overlay) return;
+
+  const closeNav = () => {
+    document.body.classList.remove('nav-open');
+    toggle.setAttribute('aria-label', 'Open menu');
+    toggle.setAttribute('aria-expanded', 'false');
+    drawer.setAttribute('aria-hidden', 'true');
+    overlay.setAttribute('aria-hidden', 'true');
+    navFocusCleanup?.();
+    navFocusCleanup = null;
+    toggle.focus();
+  };
+
+  const openNav = () => {
+    document.body.classList.add('nav-open');
+    toggle.setAttribute('aria-label', 'Close menu');
+    toggle.setAttribute('aria-expanded', 'true');
+    drawer.setAttribute('aria-hidden', 'false');
+    overlay.setAttribute('aria-hidden', 'false');
+    navFocusCleanup?.();
+    navFocusCleanup = createFocusTrap(drawer, closeNav);
+    const first = drawer.querySelector('a,button');
+    if (first instanceof HTMLElement) first.focus();
+    else if (drawer instanceof HTMLElement) drawer.focus();
+  };
+
+  toggle.onclick = () => {
+    const isOpen = document.body.classList.contains('nav-open');
+    if (isOpen) {
+      closeNav();
+    } else {
+      openNav();
+    }
+  };
+
+  overlay.onclick = closeNav;
+  drawer.addEventListener('click', (e) => {
+    if (e.target.closest('a,button')) closeNav();
+  });
+
+  // Swipe left on the drawer to close it (mobile).
+  let _navSwipeStartX = 0;
+  drawer.addEventListener('touchstart', (e) => {
+    _navSwipeStartX = e.changedTouches[0].clientX;
+  }, { passive: true });
+  drawer.addEventListener('touchend', (e) => {
+    const dx = _navSwipeStartX - e.changedTouches[0].clientX;
+    if (dx > 48) closeNav();
+  }, { passive: true });
+}
+
+// On mobile, temporarily un-stick the order CTA while an input is focused
+// so the virtual keyboard doesn't obscure the Add to cart button.
+function initMobileInputFix() {
+  const orderCta = document.querySelector('.order-cta');
+  if (!orderCta) return;
+  const inputs = document.querySelectorAll('.config-right input, .config-right textarea');
+  inputs.forEach((input) => {
+    input.addEventListener('focus', () => {
+      orderCta.style.position = 'relative';
+      orderCta.style.bottom = 'auto';
+      orderCta.style.boxShadow = 'none';
+    });
+    input.addEventListener('blur', () => {
+      orderCta.style.position = '';
+      orderCta.style.bottom = '';
+      orderCta.style.boxShadow = '';
+    });
+  });
+}
+
+// ── Custom size ────────────────────────────────────────────────────────────────
+
+// Price for the current custom dimensions as returned by the API (pence).
+// null means no price has been fetched yet or the fetch is in flight.
+let customSizeUnitAmount = null;
+let customSizePriceDebounceTimer = null;
+
+function buildCustomProduct(widthMm, heightMm, unitAmountPence) {
+  return {
+    id: 'custom',
+    name: 'Custom',
+    displaySize: `${widthMm}\u00D7${heightMm}mm`,
+    sizeCode: widthMm * CUSTOM_MAP_SCALE,
+    aspectRatio: heightMm / widthMm,
+    unitAmount: 12500,
+    priceId: 'custom',
+    customWidthMm: widthMm,
+    customHeightMm: heightMm,
+  };
+}
+
+function activateCustomSize() {
+  const panel = document.getElementById('custom-size-panel');
+  if (panel) panel.hidden = false;
+  document.querySelectorAll('.size-opt').forEach((b) => b.classList.remove('active'));
+  const customBtn = document.querySelector('.size-opt[data-product-id="custom"]');
+  if (customBtn) customBtn.classList.add('active');
+  updateCustomSizeSelection();
+}
+
+async function fetchCustomSizePrice(widthMm, heightMm) {
+  const res = await fetch(
+    `${apiBase}/api/custom-size-price?widthMm=${encodeURIComponent(widthMm)}&heightMm=${encodeURIComponent(heightMm)}`
+  );
+  if (!res.ok) throw new Error(`Pricing unavailable (${res.status})`);
+  const data = await res.json();
+  if (typeof data?.unitAmount !== 'number') throw new Error('Invalid pricing response');
+  return data.unitAmount; // pence
+}
+
+function updateCustomSizeSelection() {
+  const wInput = document.getElementById('custom-width');
+  const hInput = document.getElementById('custom-height');
+  if (!wInput || !hInput) return;
+
+  const rawW = Number(wInput.value);
+  const rawH = Number(hInput.value);
+  if (!Number.isFinite(rawW) || rawW <= 0 || !Number.isFinite(rawH) || rawH <= 0) return;
+
+  const w = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, rawW)));
+  const h = Math.round(Math.max(CUSTOM_SIZE_MIN_MM, Math.min(CUSTOM_SIZE_MAX_MM, rawH)));
+
+  // Show surcharge note based on dimensions (no API call needed for this).
+  const surchargeEl = document.getElementById('custom-size-surcharge-note');
+  if (surchargeEl) {
+    surchargeEl.hidden = !(w > CUSTOM_SIZE_LARGE_THRESHOLD_MM || h > CUSTOM_SIZE_LARGE_THRESHOLD_MM);
+  }
+
+  // Show loading state while price is fetched from the server.
+  customSizeUnitAmount = null;
+  const priceLabelEl = document.querySelector('.size-opt[data-product-id="custom"] .size-opt-price');
+  if (priceLabelEl) priceLabelEl.textContent = '…';
+
+  clearTimeout(customSizePriceDebounceTimer);
+  customSizePriceDebounceTimer = setTimeout(async () => {
+    try {
+      const unitAmountPence = await fetchCustomSizePrice(w, h);
+      customSizeUnitAmount = unitAmountPence;
+      if (priceLabelEl) priceLabelEl.textContent = formatPriceFromAmount(unitAmountPence);
+      selectProduct(buildCustomProduct(w, h, unitAmountPence));
+    } catch {
+      if (priceLabelEl) priceLabelEl.textContent = '—';
+      showBanner('Unable to fetch price for this size. Please try again.', 'fail');
+    }
+  }, 400);
+}
+
+function initCustomSizePanel() {
+  const wInput = document.getElementById('custom-width');
+  const hInput = document.getElementById('custom-height');
+  if (!wInput || !hInput) return;
+  const onChange = () => {
+    if (selectedProduct?.id !== 'custom') return;
+    updateCustomSizeSelection();
+  };
+  wInput.addEventListener('input', onChange);
+  hInput.addEventListener('input', onChange);
+  wInput.addEventListener('change', onChange);
+  hInput.addEventListener('change', onChange);
+}
+
+// ── End custom size ────────────────────────────────────────────────────────────
+
+// ── Frame controls (rotation + zoom sliders) ───────────────────────────────────
+
+function initFrameControls() {
+  const rotBtn = document.getElementById('rotation-btn');
+  const zoomSlider = document.getElementById('zoom-slider');
+  const zoomVal = document.getElementById('zoom-val');
+  const controlsEl = document.getElementById('frame-controls');
+  const zoomToggleBtn = document.getElementById('zoom-toggle-btn');
+
+  if (rotBtn) {
+    rotBtn.addEventListener('click', () => {
+      const isRotated = rotBtn.getAttribute('aria-pressed') === 'true';
+      frameRotation = isRotated ? 0 : 90;
+      rotBtn.setAttribute('aria-pressed', isRotated ? 'false' : 'true');
+      if (frameCenter && selectedProduct) {
+        resetReviewState();
+        redrawFrame();
+        updateLocationDisplay();
+      }
+    });
+  }
+
+  if (zoomSlider) {
+    zoomSlider.addEventListener('input', () => {
+      frameZoom = Number(zoomSlider.value);
+      if (zoomVal) zoomVal.textContent = `${frameZoom.toFixed(1)}\u00D7`;
+      if (frameCenter && selectedProduct) {
+        resetReviewState();
+        redrawFrame();
+        updateLocationDisplay();
+      }
+    });
+  }
+
+  // Collapse zoom into a toggle button when it would overlap the search bar
+  if (controlsEl && zoomToggleBtn) {
+    const searchEl = document.querySelector('.map-search');
+    const mapEl = document.querySelector('.config-map');
+    let _overlapLocked = false;
+
+    function checkZoomOverlap() {
+      if (_overlapLocked || controlsEl.hidden || !searchEl) return;
+      _overlapLocked = true;
+
+      // Temporarily uncollapse to measure the full-width controls accurately
+      const wasCollapsed = controlsEl.classList.contains('zoom-collapsed');
+      controlsEl.classList.remove('zoom-collapsed', 'zoom-open');
+
+      const searchRect = searchEl.getBoundingClientRect();
+      const controlsRect = controlsEl.getBoundingClientRect();
+      const overlapping = searchRect.right + 12 >= controlsRect.left;
+
+      if (overlapping) {
+        controlsEl.classList.add('zoom-collapsed');
+        if (wasCollapsed) {
+          // Restore open state only if the panel should remain open
+          // (don't re-open on map resize — just keep it closed)
+        }
+      }
+      // else: already uncollapsed by classList.remove above
+
+      // Release lock after pending resize callbacks from our DOM changes have fired
+      requestAnimationFrame(() => { _overlapLocked = false; });
+    }
+
+    _checkZoomOverlap = checkZoomOverlap;
+
+    if (mapEl) {
+      const ro = new ResizeObserver(checkZoomOverlap);
+      ro.observe(mapEl);
+    }
+
+    zoomToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = controlsEl.classList.toggle('zoom-open');
+      zoomToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (controlsEl.classList.contains('zoom-open') && !controlsEl.contains(e.target)) {
+        controlsEl.classList.remove('zoom-open');
+        zoomToggleBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+}
+
+// ── End frame controls ─────────────────────────────────────────────────────────
+
+
+initCartUI();
+initNavUI();
+showCheckoutBanner();
+
+if (document.getElementById('storePage')) {
+  initStore();
+}
+
+async function reviewSelection() {
+  if (!selectedProduct || !bbox || !selectionMeta) return;
+  const btn = document.getElementById('sel-run');
+  btn.disabled = true;
+  btn.textContent = 'Locating\u2026';
+  try {
+    const center = selectionMeta.center;
+    const url = `${apiBase}/api/reverse-geocode?lat=${center.lat}&lon=${center.lng}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Reverse geocoding failed.');
+    const data = await res.json();
+    selectionMeta.locationText = data?.label || data?.display_name || 'Location unavailable';
+  } catch {
+    selectionMeta.locationText = 'Location unavailable';
+  }
+  addSelectionToCart();
+  document.getElementById('order-status-msg').textContent = '\u2713 Added to cart.';
+  btn.textContent = '\u2713 Added to cart';
+  btn.disabled = false;
+  openCart();
+}
+
+function resetReviewState() {
+  const btn = document.getElementById('sel-run');
+  if (btn) btn.textContent = 'Add to cart \u2192';
+  const statusEl = document.getElementById('order-status-msg');
+  if (statusEl) statusEl.textContent = 'Frame placed. Drag to adjust, then add to cart.';
+}
+
+
+window.showStore = showStore;
+window.showLanding = showLanding;
