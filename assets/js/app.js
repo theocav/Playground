@@ -376,7 +376,9 @@ function selectProduct(product) {
         createBBox(center, handleIcon);
       }
       document.getElementById('sel-run').disabled = false;
-      document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+      if (!window.matchMedia('(pointer: coarse)').matches) {
+        document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+      }
       document.getElementById('order-status-msg').textContent = 'Adjust the frame, then add to cart.';
     } else {
       document.getElementById('order-status-msg').textContent = 'Unable to place the frame for this size.';
@@ -411,35 +413,51 @@ function handleFrameChange(product, frameValue, isEnabled) {
   }
 }
 
+function _applyFramePrices(rawFramePrices) {
+  if (!rawFramePrices || typeof rawFramePrices !== 'object') return;
+  Object.entries(rawFramePrices).forEach(([frameKey, framesArray]) => {
+    if (Array.isArray(framesArray) && framesArray.length > 0) {
+      const valid = framesArray.filter(f =>
+        f?.priceId &&
+        typeof f.unitAmount === 'number' &&
+        f.colourHex &&
+        f.colourName
+      );
+      if (valid.length > 0) {
+        frameOptions[frameKey] = valid.map(f => ({
+          priceId: f.priceId,
+          unitAmount: f.unitAmount,
+          colourHex: f.colourHex,
+          colourName: f.colourName,
+        }));
+      }
+    }
+  });
+}
+
 async function loadProducts() {
   try {
-    const res = await fetch(`${apiBase}/api/products`);
-    const data = await res.json();
-    const list = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : [];
-    products = sanitizeProductList(list);
-    try { localStorage.setItem(_PRODUCTS_CACHE_KEY, JSON.stringify({ ts: Date.now(), products })); } catch (_) {}
-    // Merge frame options from API.
-    // Supports new framePrices format keyed by frameKey with colour metadata.
-    if (data?.framePrices && typeof data.framePrices === 'object') {
-      Object.entries(data.framePrices).forEach(([frameKey, framesArray]) => {
-        if (Array.isArray(framesArray) && framesArray.length > 0) {
-          const valid = framesArray.filter(f =>
-            f?.priceId &&
-            typeof f.unitAmount === 'number' &&
-            f.colourHex &&
-            f.colourName
-          );
-          if (valid.length > 0) {
-            frameOptions[frameKey] = valid.map(f => ({
-              priceId: f.priceId,
-              unitAmount: f.unitAmount,
-              colourHex: f.colourHex,
-              colourName: f.colourName,
-            }));
-          }
-        }
-      });
+    let list, rawFramePrices;
+
+    // Try store cache first (products + framePrices, 1-hour TTL).
+    let cached;
+    try { cached = JSON.parse(localStorage.getItem(_STORE_CACHE_KEY)); } catch (_) {}
+    if (cached && typeof cached.ts === 'number' && Date.now() - cached.ts < _PRODUCTS_CACHE_TTL && Array.isArray(cached.products)) {
+      list = cached.products;
+      rawFramePrices = cached.framePrices || null;
+    } else {
+      const res = await fetch(`${apiBase}/api/products`);
+      const data = await res.json();
+      list = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : [];
+      rawFramePrices = data?.framePrices || null;
+      const sanitized = sanitizeProductList(list);
+      // Save to store cache (full data) and homepage cache (products only).
+      try { localStorage.setItem(_STORE_CACHE_KEY, JSON.stringify({ ts: Date.now(), products: sanitized, framePrices: rawFramePrices })); } catch (_) {}
+      try { localStorage.setItem(_PRODUCTS_CACHE_KEY, JSON.stringify({ ts: Date.now(), products: sanitized })); } catch (_) {}
     }
+
+    products = sanitizeProductList(list);
+    _applyFramePrices(rawFramePrices);
     renderSizeOptions();
     const loadingEl = document.getElementById('store-size-loading');
     if (loadingEl) loadingEl.classList.add('hidden');
@@ -516,7 +534,9 @@ function setupMapSearch() {
           createBBox(center, handleIcon);
         }
         document.getElementById('sel-run').disabled = false;
-        document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+        if (!window.matchMedia('(pointer: coarse)').matches) {
+          document.getElementById('map-hint').textContent = 'Drag the corner handle to reposition';
+        }
         document.getElementById('order-status-msg').textContent = 'Looking good! Adjust the frame then add to cart.';
       }
     }
@@ -1386,7 +1406,8 @@ function initCartUI() {
 }
 
 const _PRODUCTS_CACHE_KEY = 'polyplaces_products_cache_v1';
-const _PRODUCTS_CACHE_TTL = 3600000; // 1 hour
+const _STORE_CACHE_KEY = 'polyplaces_store_cache_v1';
+const _PRODUCTS_CACHE_TTL = 900000; // 15 minutes
 
 async function loadHomepagePrices() {
   let prods;
@@ -1416,6 +1437,7 @@ function initNavUI() {
   const toggle = document.getElementById('nav-toggle');
   const drawer = document.getElementById('nav-drawer');
   const overlay = document.getElementById('nav-overlay');
+  const drawerClose = document.getElementById('nav-drawer-close');
   if (!toggle || !drawer || !overlay) return;
 
   const closeNav = () => {
@@ -1452,6 +1474,7 @@ function initNavUI() {
   };
 
   overlay.onclick = closeNav;
+  if (drawerClose) drawerClose.onclick = closeNav;
   drawer.addEventListener('click', (e) => {
     if (e.target.closest('a,button')) closeNav();
   });

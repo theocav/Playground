@@ -54,7 +54,7 @@ nav{
   border-bottom:1px solid var(--border);
 }
 .nav-toggle{
-  display:none;align-items:center;justify-content:center;gap:4px;
+  display:none;flex-direction:column;align-items:center;justify-content:center;gap:5px;
   width:44px;height:44px;border:none;outline:none;border-radius:0;
   background:transparent;cursor:pointer;transition:all 0.2s;
 }
@@ -62,9 +62,10 @@ nav{
   display:block;width:18px;height:2px;background:var(--ink);border-radius:999px;
 }
 .nav-drawer{display:flex;align-items:center}
+.nav-drawer-close{display:none}
 .nav-overlay{
   position:fixed;inset:0;background:rgba(26,23,20,0.35);opacity:0;pointer-events:none;
-  transition:opacity 0.25s ease;z-index:480;
+  transition:opacity 0.25s ease;z-index:650;
 }
 .nav-open{overflow:hidden}
 .nav-open .nav-overlay{opacity:1;pointer-events:auto}
@@ -522,6 +523,15 @@ footer{background:var(--ink);padding:56px 40px 32px;display:grid;grid-template-c
     align-items:flex-start;z-index:700;
   }
   .nav-open .nav-drawer{transform:translateX(0)}
+  .nav-drawer-close{
+    display:flex;align-items:center;justify-content:center;
+    position:absolute;top:12px;right:14px;
+    width:36px;height:36px;border:none;border-radius:50%;
+    background:transparent;cursor:pointer;
+    font-size:22px;line-height:1;color:var(--ink);
+    transition:background 0.15s;
+  }
+  .nav-drawer-close:hover{background:var(--border)}
   .nav-links{
     flex-direction:column;align-items:flex-start;gap:14px;
     padding:84px 22px 24px;width:100%;
