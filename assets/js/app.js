@@ -6,6 +6,13 @@ const prefersReducedMotion = window.matchMedia
 
 const runtimeEnv = window.__POLYPLACES_ENV__ || {};
 
+if (runtimeEnv.SENTRY_DSN && typeof Sentry !== 'undefined') {
+  Sentry.init({
+    dsn: runtimeEnv.SENTRY_DSN,
+    environment: runtimeEnv.POLYPLACES_SITE_URL?.includes('localhost') ? 'development' : 'production',
+  });
+}
+
 if (prefersReducedMotion) {
   document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in'));
 } else {
@@ -436,10 +443,15 @@ async function loadProducts() {
     const loadingEl = document.getElementById('store-size-loading');
     if (loadingEl) loadingEl.classList.add('hidden');
     return products;
-  } catch {
-    renderSizeOptions();
+  } catch (err) {
+    if (typeof Sentry !== 'undefined') Sentry.captureException(err);
     const loadingEl = document.getElementById('store-size-loading');
     if (loadingEl) loadingEl.classList.add('hidden');
+    const emptyEl = document.getElementById('size-options-empty');
+    if (emptyEl) {
+      emptyEl.textContent = 'Sizes failed to load. Please refresh the page.';
+      emptyEl.classList.remove('hidden');
+    }
     return [];
   }
 }
@@ -738,8 +750,7 @@ function syncCartPreviewMaps() {
     if (!center || !Number.isFinite(Number(center.lat)) || !Number.isFinite(Number(center.lng))) return null;
 
     const resolvedProduct =
-      products.find((p) => String(p?.id) === String(item?.productId)) ||
-      fallbackProducts.find((p) => String(p?.id) === String(item?.productId));
+      products.find((p) => String(p?.id) === String(item?.productId));
 
     // If we can't resolve a product entry (e.g., cart opened on pages where products
     // aren't loaded), fall back to dimensions stored on the cart item itself.
