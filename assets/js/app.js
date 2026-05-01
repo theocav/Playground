@@ -1442,7 +1442,7 @@ async function loadHomepagePrices() {
       prods = cached.products;
     } else {
       const res = await fetch(`${apiBase}/api/products`);
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`Products fetch failed: ${res.status}`);
       const data = await res.json();
       prods = sanitizeProductList(Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : []);
       try { localStorage.setItem(_PRODUCTS_CACHE_KEY, JSON.stringify({ ts: Date.now(), products: prods })); } catch (_) {}
@@ -1454,7 +1454,10 @@ async function loadHomepagePrices() {
         el.removeAttribute('hidden');
       }
     });
-  } catch (_) { /* silently fail — prices are optional on homepage */ }
+  } catch (err) {
+    if (typeof Sentry !== 'undefined') Sentry.captureException(err);
+    console.error('[Polyplaces] Failed to load homepage prices:', err);
+  }
 }
 
 function initNavUI() {
